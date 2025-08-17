@@ -11,7 +11,11 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <!-- Babel (JSX) -->
   <script crossorigin src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
-  <style>body{background:#0b0f19;color:#e5e7eb} body.modal-open{overflow:hidden}</style>
+  <style>
+    :root { color-scheme: dark; }
+    body{background:#0b0f19;color:#e5e7eb}
+    body.modal-open{overflow:hidden}
+  </style>
 </head>
 <body>
   <div id="root"></div>
@@ -67,20 +71,20 @@
       );
     }
 
-    // ---------- Modal ----------
+    // ---------- Modal (mobile-friendly, scrollable) ----------
     function Modal({ open, title, children, onClose, onSubmit, submitLabel }) {
       useEffect(function(){ document.body.classList.toggle('modal-open', open); return function(){ document.body.classList.remove('modal-open'); }; }, [open]);
       if (!open) return null;
       return (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={onClose}></div>
-          <div className="relative w-full max-w-3xl rounded-xl bg-gray-900 shadow-xl border border-gray-800 p-6">
-            <div className="flex items-center justify-between mb-4">
+          <button className="absolute inset-0 bg-black/60" onClick={onClose} aria-label="Fermer la fenêtre"></button>
+          <div className="relative w-full max-w-3xl mx-4 rounded-xl bg-gray-900 shadow-xl border border-gray-800 p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4 sticky top-0 bg-gray-900">
               <h3 className="text-lg font-semibold">{title}</h3>
               <button onClick={onClose} className="p-2 rounded hover:bg-gray-800" title="Fermer">✕</button>
             </div>
             <div className="space-y-4">{children}</div>
-            <div className="mt-6 flex justify-end gap-3">
+            <div className="mt-6 flex justify-end gap-3 sticky bottom-0 bg-gray-900 pt-4">
               <button onClick={onClose} className="px-4 py-2 rounded border border-gray-700 hover:bg-gray-800">Annuler</button>
               {onSubmit ? <button onClick={onSubmit} className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">{submitLabel||"Enregistrer"}</button> : null}
             </div>
@@ -109,7 +113,7 @@
       if(!val) return "";
       var s=String(val).trim();
       s=s.replace(/cauda|caput|tail|head/gi," ").trim();
-      if(/^(sh|se)\s*2/i.test(s) || /\d/.test(s)) return "";
+      if(/^(sh|se)\s*2/i.test(s) || /\d/.test(s)) return ""; // ignore SH2/SE2 etc.
       var compact=s.replace(/\s+/g,"");
       if(VALID_ABBR.has(compact)) return compact;
       var lower=s.toLowerCase(); if(FR_TO_ABBR[lower]) return FR_TO_ABBR[lower];
@@ -121,16 +125,32 @@
       return "";
     }
     function ensureConstLAT(val){ var abbr=ensureConstAbbr(val); return abbr? IAU_LAT[abbr] : (val?String(val):""); }
-    function prettyType(raw){
-      if(!raw) return "";
-      var t=String(raw).toLowerCase().replace(/[^a-z]/g,"");
-      var map={g:"Galaxie",gx:"Galaxie",galaxy:"Galaxie",gpair:"Paire de galaxies",gtrpl:"Triplet de galaxies",ggroup:"Groupe de galaxies",ocl:"Amas ouvert",gcl:"Amas globulaire",cln:"Amas + nébuleuse",pn:"Nébuleuse planétaire",hii:"Région H II",neb:"Nébuleuse",emn:"Nébuleuse en émission",rfn:"Nébuleuse par réflexion",drkn:"Nébuleuse obscure",dn:"Nébuleuse obscure",snr:"Rémanent de supernova",ast:"Astérisme",star:"Étoile",doublestar:"Étoile double"};
-      return map[t]||raw;
-    }
     function displayConstellation(val, lang){
       var ab = ensureConstAbbr(val);
       if(ab){ return (lang==='fr' ? (IAU_FR[ab]||IAU_LAT[ab]) : (IAU_LAT[ab]||IAU_FR[ab]) ); }
       return val||"";
+    }
+
+    // ---------- Types : mapping renforcé ----------
+    function prettyType(raw){
+      if(!raw) return "";
+      var t=String(raw).toLowerCase().replace(/[^a-z]/g,"");
+      var map={
+        g:"Galaxie",gx:"Galaxie",galaxy:"Galaxie",spiralgalaxy:"Galaxie",ellipticalgalaxy:"Galaxie",
+        gpair:"Paire de galaxies",gtrpl:"Triplet de galaxies",ggroup:"Groupe de galaxies",galaxycluster:"Amas de galaxies",
+        ocl:"Amas ouvert",opencluster:"Amas ouvert",
+        gcl:"Amas globulaire",globularcluster:"Amas globulaire",
+        cln:"Amas + nébuleuse",
+        pn:"Nébuleuse planétaire",planetarynebula:"Nébuleuse planétaire",
+        hii:"Région H II",hiiregion:"Région H II",
+        neb:"Nébuleuse",emissionnebula:"Nébuleuse en émission",
+        rfn:"Nébuleuse par réflexion",reflectionnebula:"Nébuleuse par réflexion",
+        drkn:"Nébuleuse obscure",darknebula:"Nébuleuse obscure",dn:"Nébuleuse obscure",
+        snr:"Rémanent de supernova",supernovaremnant:"Rémanent de supernova",
+        ast:"Astérisme",
+        star:"Étoile",doublestar:"Étoile double",double:"Étoile double"
+      };
+      return map[t]||raw;
     }
 
     // ---------- Champ helper ----------
@@ -184,9 +204,15 @@
     var H0 = 70; // km/s/Mpc
     function fromZtoLy(z){ if(z==null || isNaN(z)) return null; var d_mpc = z * (C_KM_S/H0); return d_mpc * 1e6 * 3.26156; }
     function fromVtoLy(km_s){ if(km_s==null||isNaN(km_s)) return null; var d_mpc = km_s / H0; return d_mpc * 1e6 * 3.26156; }
-    function extractDistanceLyFromFields(f){
+
+    // ⚠️ On NE tombe plus sur des distances absurdes :
+    // - On lit d'abord une distance explicite (ly/kly/Mly/pc/kpc/Mpc)
+    // - SINON : on NE calcule via z/rv QUE si c'est une galaxie
+    function extractDistanceLyFromFields(f, typeHint){
       if(!f) return {ly:null, approx:false};
       function num(x){ var n=parseFloat(String(x).replace(',', '.')); return isNaN(n)?null:n; }
+
+      // distances explicites
       var dl = pickField(f,["distance","distance_ly","dist_ly","distly","ly","distanceal","distance_a_l","distancealy"]);
       var dly = num(dl); if(dly!=null && dly>0) return {ly:dly, approx:false};
       var dk = num(pickField(f,["distance_kly","kly"])); if(dk!=null && dk>0) return {ly: dk*1000, approx:false};
@@ -194,12 +220,21 @@
       var pc  = num(pickField(f,["pc","parsec","distance_pc","distance_parsec"])); if(pc!=null && pc>0) return {ly: pc*3.26156, approx:false};
       var kpc = num(pickField(f,["kpc","distance_kpc"])); if(kpc!=null && kpc>0) return {ly: kpc*1000*3.26156, approx:false};
       var mpc = num(pickField(f,["mpc","distance_mpc"])); if(mpc!=null && mpc>0) return {ly: mpc*1e6*3.26156, approx:false};
-      var z = num(pickField(f,["redshift","z"])); if(z!=null && z>0){ var ly=fromZtoLy(z); if(ly!=null) return {ly:ly, approx:true}; }
-      var rv = num(pickField(f,["radvel","radial_velocity","radialvelocity","rv","vel"])); if(rv!=null && rv>0){ var ly2=fromVtoLy(rv); if(ly2!=null) return {ly:ly2, approx:true}; }
+
+      // fallback z/rv UNIQUEMENT pour les galaxies
+      var t = String(typeHint||pickField(f,["type","object_type","otype","type_fr"])).toLowerCase();
+      var isGalaxy = /galax/.test(t);
+      if(isGalaxy){
+        var z = num(pickField(f,["redshift","z"])); if(z!=null && z>0){ var ly=fromZtoLy(z); if(ly!=null) return {ly:ly, approx:true}; }
+        var rv = num(pickField(f,["radvel","radial_velocity","radialvelocity","rv","vel"]));
+        if(rv!=null && Math.abs(rv)>300){ // évite les petites vitesses locales
+          var ly2=fromVtoLy(Math.abs(rv)); if(ly2!=null) return {ly:ly2, approx:true};
+        }
+      }
       return {ly:null, approx:false};
     }
 
-    // Wikidata backup
+    // Wikidata backup (P2583 distance from Earth)
     async function findDistanceLyWikidata(q){
       try{
         var r = await fetch("https://www.wikidata.org/w/api.php?action=wbsearchentities&search="+encodeURIComponent(q)+"&language=fr&format=json&origin=*");
@@ -216,12 +251,10 @@
         var val = snak.datavalue.value; if(!val || !val.amount) return null;
         var amount = parseFloat(val.amount);
         var unit = String(val.unit||"");
-        if(unit.indexOf("Q12129")>=0){ return {ly:amount, approx:true}; }
-        else if(unit.indexOf("Q12130")>=0){ return {ly:amount*3.26156, approx:true}; }
-        else if(unit.indexOf("Q200723")>=0){ return {ly:amount*1000*3.26156, approx:true}; }
-        else if(unit.indexOf("Q9038")>=0){ return {ly:amount*1e6*3.26156, approx:true}; }
-        else if(unit.indexOf("Q11573")>=0){ return {ly:amount/9.4607e15, approx:true}; }
-        else if(unit.indexOf("Q1812")>=0){ return {ly:amount/63241.077, approx:true}; }
+        if(unit.indexOf("Q12129")>=0){ return {ly:amount, approx:true}; }            // light-year
+        else if(unit.indexOf("Q12130")>=0){ return {ly:amount*3.26156, approx:true}; } // parsec
+        else if(unit.indexOf("Q200723")>=0){ return {ly:amount*1000*3.26156, approx:true}; } // kiloparsec
+        else if(unit.indexOf("Q9038")>=0){ return {ly:amount*1e6*3.26156, approx:true}; }    // megaparsec
         return null;
       }catch(e){ return null; }
     }
@@ -245,8 +278,12 @@
           var type   = prettyType(pickField(f,["type","type_fr","object_type"]));
           var coords = extractCoords(f);
           var common = pickField(f,["name_fr","popular_name_fr","name","common_name"]);
-          var dist = extractDistanceLyFromFields(f);
-          return { constellation: constAbbr? IAU_LAT[constAbbr]:"", type:type, raHours:coords.raHours, decDeg:coords.decDeg, commonName:common||"", distanceLy:dist.ly, distanceApprox:dist.approx };
+          var dist = extractDistanceLyFromFields(f, type);
+          if((dist.ly==null || isNaN(dist.ly)) && mNum!=null){
+            var w = await findDistanceLyWikidata("Messier "+mNum);
+            if(w){ dist = w; }
+          }
+          return { constellation: constAbbr? IAU_LAT[constAbbr]:"", type:type, raHours:coords.raHours, decDeg:coords.decDeg, commonName:common||"", distanceLy:dist.ly, distanceApprox:dist.approx===true };
         }
       }catch(e){}
       return null;
@@ -266,22 +303,23 @@
       var ic =f.ic ?("IC "+f.ic ):((f.name&&/^IC/i.test(f.name) )?String(f.name).toUpperCase() :"");
       var main=mLab||ngc||ic||(f.name||"");
       var second=mLab?(ngc||ic||(f.name||"")):((ngc&&ic)?(ngc+" / "+ic):(ngc||ic||""));
-      var typePretty=prettyType(pickField(f,["type","object_type","otype"]));
+      var typePretty=prettyType(pickField(f,["type","object_type","otype","type_fr"]));
       var constAbbr=ensureConstAbbr(pickField(f,["constellation","constellation_en","constellation_fr","constabbr","con","const"]));
       var constLAT = constAbbr?IAU_LAT[constAbbr]:"";
       var coords=extractCoords(f);
       var common=pickField(f,["name_fr","popular_name_fr","name","common_name","proper_name"]);
-      var dist = extractDistanceLyFromFields(f);
+      var dist = extractDistanceLyFromFields(f, typePretty);
 
       var extras = []; if(second) extras.push(second); if(typePretty) extras.push(typePretty); if(constLAT) extras.push(constLAT); if(common) extras.push(common);
       var label = main + (extras.length?(" — "+extras.join(" — ")):"");
       return {
         label:label, nom:main, type:typePretty||"", typeCode:f.type||"", constellation:constLAT||"",
         raHours:coords.raHours, decDeg:coords.decDeg, commonName:(looksLikeCatalogCode(common)? "":(common||"")),
-        distanceLy: dist.ly, distanceApprox: dist.approx
+        distanceLy: dist.ly, distanceApprox: dist.approx===true
       };
     }
 
+    // ---------- Recherche Datastro (robuste "NGC 6992" vs "NGC6992") ----------
     async function searchSkyObjectsDatastro(query){
       if(!query||query.length<1) return [];
       var q = String(query).trim();
@@ -321,15 +359,16 @@
               var constLAT   = constAbbr? IAU_LAT[constAbbr] : "";
               var coords = extractCoords(f);
               var common = pickField(f,["name_fr","popular_name_fr","name","common_name"]);
-              var dist = extractDistanceLyFromFields(f);
+              var dist = extractDistanceLyFromFields(f, typePretty);
               var extras = []; if(second) extras.push(second); if(typePretty) extras.push(typePretty); if(constLAT) extras.push(constLAT); if(common) extras.push(common);
               var label = main + (extras.length?(" — "+extras.join(" — ")):"");
-              pushItem({ label:label, nom:main, type:typePretty||"", constellation:constLAT||"", raHours:coords.raHours, decDeg:coords.decDeg, commonName:common||"", distanceLy:dist.ly, distanceApprox:dist.approx });
+              pushItem({ label:label, nom:main, type:typePretty||"", constellation:constLAT||"", raHours:coords.raHours, decDeg:coords.decDeg, commonName:common||"", distanceLy:dist.ly, distanceApprox:dist.approx===true });
             });
           }
         }
       }catch(e){}
 
+      // Variantes de recherche (espaces / pas d'espaces)
       var variants = [ q ];
       var compact = q.replace(/\s+/g,''); if(compact!==q) variants.push(compact);
       function addVariants(prefix, num){ if(num==null) return; variants.push(prefix+" "+num); variants.push(prefix+num); variants.push(prefix+"-"+num); }
@@ -520,7 +559,7 @@
           />
           {loading ? <div className="absolute right-3 top-2.5 text-sm opacity-70">…</div> : null}
           {open && items.length>0 ? (
-            <div className="absolute mt-1 w-full max-h-56 overflow-auto rounded-md border border-gray-700 bg-gray-900 shadow-lg z-10">
+            <div className="absolute mt-1 w-full max-h-60 overflow-auto rounded-md border border-gray-700 bg-gray-900 shadow-lg z-10">
               {items.map(function(it,i){
                 return (
                   <button key={i} className="w-full text-left px-3 py-2 hover:bg-gray-800" onClick={function(){ pick(it); }} type="button">
@@ -603,7 +642,7 @@
             <AutoCompleteInput
               value={draft.nom}
               setValue={function(v){setDraft({...draft, nom:v});}}
-              placeholder="Ex: M42, NGC 6992, Saturne…"
+              placeholder="Ex: M13, M42, NGC 6992, Saturne…"
               fetcher={searchSkyObjectsDatastro}
               onPick={async function(item){
                 var nom=(item&&item.nom)?item.nom:draft.nom;
@@ -615,6 +654,7 @@
                 var distanceLy=(item&&item.distanceLy!=null)?item.distanceLy:draft.distanceLy;
                 var distanceApprox=(item&&item.distanceApprox===true)?true:draft.distanceApprox===true;
 
+                // Enrichissement complémentaire si besoin
                 if(!constellation || !type || raHours==null || decDeg==null || !commonName || distanceLy==null){
                   var extra=await enrichObjectDetails(nom);
                   if(!constellation) constellation=extra.constellation;
@@ -650,11 +690,11 @@
             </div>
             <div>
               <label className="block text-sm mb-1">AD (h)</label>
-              <input value={(draft.raHours!=null?draft.raHours:"")} onChange={function(e){var v=e.target.value; setDraft({...draft, raHours:(v===""?null:Number(v))});}} placeholder="Ex: 5.59" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+              <input value={(draft.raHours!=null?draft.raHours:"")} onChange={function(e){var v=e.target.value; setDraft({...draft, raHours:(v===""?null:Number(v))});}} placeholder="Ex: 16.42" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
             </div>
             <div>
               <label className="block text-sm mb-1">Déc (°)</label>
-              <input value={(draft.decDeg!=null?draft.decDeg:"")} onChange={function(e){var v=e.target.value; setDraft({...draft, decDeg:(v===""?null:Number(v))});}} placeholder="Ex: -5.45" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+              <input value={(draft.decDeg!=null?draft.decDeg:"")} onChange={function(e){var v=e.target.value; setDraft({...draft, decDeg:(v===""?null:Number(v))});}} placeholder="Ex: +36.47" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
             </div>
           </div>
 
@@ -671,22 +711,12 @@
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm mb-1">Distance (années-lumière)</label>
-              <input type="number" step="1" min="0" value={(draft.distanceLy!=null?Math.round(draft.distanceLy):"")} onChange={function(e){var v=e.target.value; setDraft({...draft, distanceLy:(v===""?null:Number(v)), distanceApprox:false});}} placeholder="Ex: 5200" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-              {draft.distanceApprox ? <div className="text-xs opacity-70 mt-1">≈ valeur estimée (redshift/rv/Wikidata)</div> : null}
+              <input type="number" step="1" min="0" value={(draft.distanceLy!=null?Math.round(draft.distanceLy):"")} onChange={function(e){var v=e.target.value; setDraft({...draft, distanceLy:(v===""?null:Number(v)), distanceApprox:false});}} placeholder="Ex: 22000" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+              {draft.distanceApprox ? <div className="text-xs opacity-70 mt-1">≈ valeur estimée (source externe)</div> : null}
             </div>
             <div>
               <label className="block text-sm mb-1">Note</label>
               <textarea value={draft.note||""} onChange={function(e){setDraft({...draft, note:e.target.value});}} rows="3" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"></textarea>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="block text-sm mb-1">Oculaires (Paramètres)</label>
-              <div className="text-xs opacity-70">
-                {(!nightScope) ? "Renseignez le télescope (Diamètre/Focale) pour des conseils." :
-                 (function(){var s1=suggestionForScopeAndObject(nightScope, draft.type||"", draft.filters||{}); var s0=suggestionForScopeAndObject(nightScope, draft.type||"", {}); if(s1&&s0){return "Sans filtre: "+s0.rangeTxt+" ("+s0.magTxt+"), avec filtre: "+s1.rangeTxt+" ("+s1.magTxt+")"} return s1?("Plage: "+s1.rangeTxt+" ("+s1.magTxt+") — Pupille "+s1.epTxt):"Pas de suggestion.";}())}
-              </div>
             </div>
           </div>
         </div>
@@ -705,11 +735,17 @@
           var fn = (jn && jn.records && jn.records[0] && jn.records[0].fields) ? jn.records[0].fields : null;
           if(fn){
             var ca=ensureConstAbbr(pickField(fn,["constellation","const","constabbr","con"]));
-            var tp=prettyType(pickField(fn,["type","object_type","otype"]));
+            var tp=prettyType(pickField(fn,["type","object_type","otype","type_fr"]));
             var cd=extractCoords(fn);
             var cn=pickField(fn,["name_fr","popular_name_fr","name","common_name","proper_name"]);
-            var dist = extractDistanceLyFromFields(fn);
-            return { constellation: ca?IAU_LAT[ca]:"", type:tp, raHours:cd.raHours, decDeg:cd.decDeg, commonName:(looksLikeCatalogCode(cn)?"":(cn||"")), distanceLy:dist.ly, distanceApprox:dist.approx };
+            var dist = extractDistanceLyFromFields(fn, tp);
+            if(dist.ly==null){
+              var w = await findDistanceLyWikidata("NGC "+nN);
+              if(!w && mN!=null) w = await findDistanceLyWikidata("Messier "+mN);
+              if(!w && cn) w = await findDistanceLyWikidata(cn);
+              if(w) dist=w;
+            }
+            return { constellation: ca?IAU_LAT[ca]:"", type:tp, raHours:cd.raHours, decDeg:cd.decDeg, commonName:(looksLikeCatalogCode(cn)?"":(cn||"")), distanceLy:dist.ly, distanceApprox:dist.approx===true };
           }
         }catch(e){}
       }
@@ -719,11 +755,17 @@
           var fi = (ji && ji.records && ji.records[0] && ji.records[0].fields) ? ji.records[0].fields : null;
           if(fi){
             var ca=ensureConstAbbr(pickField(fi,["constellation","const","constabbr","con"]));
-            var tp=prettyType(pickField(fi,["type","object_type","otype"]));
+            var tp=prettyType(pickField(fi,["type","object_type","otype","type_fr"]));
             var cd=extractCoords(fi);
             var cn=pickField(fi,["name_fr","popular_name_fr","name","common_name","proper_name"]);
-            var dist = extractDistanceLyFromFields(fi);
-            return { constellation: ca?IAU_LAT[ca]:"", type:tp, raHours:cd.raHours, decDeg:cd.decDeg, commonName:(looksLikeCatalogCode(cn)?"":(cn||"")), distanceLy:dist.ly, distanceApprox:dist.approx };
+            var dist = extractDistanceLyFromFields(fi, tp);
+            if(dist.ly==null){
+              var w = await findDistanceLyWikidata("IC "+iN);
+              if(!w && mN!=null) w = await findDistanceLyWikidata("Messier "+mN);
+              if(!w && cn) w = await findDistanceLyWikidata(cn);
+              if(w) dist=w;
+            }
+            return { constellation: ca?IAU_LAT[ca]:"", type:tp, raHours:cd.raHours, decDeg:cd.decDeg, commonName:(looksLikeCatalogCode(cn)?"":(cn||"")), distanceLy:dist.ly, distanceApprox:dist.approx===true };
           }
         }catch(e){}
       }
@@ -736,34 +778,17 @@
         var j = await fetchDatastro("ngc-ic-messier-catalog","q="+encodeURIComponent(mainName)+"&rows=1");
         var f=(j && j.records && j.records[0] && j.records[0].fields) ? j.records[0].fields : null;
         if(f){
+          var type=prettyType(pickField(f,["type","object_type","otype","type_fr"]));
           var constAbbr=ensureConstAbbr(pickField(f,["constellation","constellation_en","constellation_fr","constabbr","con","const"]));
-          var type=prettyType(pickField(f,["type","object_type","otype"]));
           var coords=extractCoords(f);
           var common=pickField(f,["name_fr","popular_name_fr","name","common_name","proper_name"]);
-          var dist = extractDistanceLyFromFields(f);
-          var out = { constellation: constAbbr?IAU_LAT[constAbbr]:"", type:type, raHours:coords.raHours, decDeg:coords.decDeg, commonName:(looksLikeCatalogCode(common)?"":(common||"")), distanceLy:dist.ly, distanceApprox:dist.approx };
-
-          if(mN!=null){
-            var extra = await enrichFromMessier(mN);
-            if(extra){
-              out.constellation = out.constellation || extra.constellation;
-              out.type = out.type || extra.type;
-              if(out.raHours==null) out.raHours = extra.raHours;
-              if(out.decDeg==null) out.decDeg = extra.decDeg;
-              if(!out.commonName) out.commonName = extra.commonName;
-              if(out.distanceLy==null){ out.distanceLy = extra.distanceLy; out.distanceApprox = extra.distanceApprox; }
-            }
-          }
-
-          if(out.distanceLy==null){
+          var dist = extractDistanceLyFromFields(f, type);
+          if(dist.ly==null){
             var w = await findDistanceLyWikidata(mainName);
             if(!w && mN!=null) w = await findDistanceLyWikidata("Messier "+mN);
-            if(!w && nN!=null) w = await findDistanceLyWikidata("NGC "+nN);
-            if(!w && iN!=null) w = await findDistanceLyWikidata("IC "+iN);
-            if(w){ out.distanceLy = w.ly; out.distanceApprox = true; }
+            if(w) dist=w;
           }
-
-          return out;
+          return { constellation: constAbbr?IAU_LAT[constAbbr]:"", type:type, raHours:coords.raHours, decDeg:coords.decDeg, commonName:(looksLikeCatalogCode(common)?"":(common||"")), distanceLy:dist.ly, distanceApprox:dist.approx===true };
         }
       }catch(e){}
       return {constellation:"",type:"",raHours:null,decDeg:null, commonName:"", distanceLy:null, distanceApprox:false};
@@ -1024,7 +1049,7 @@
         });
       }
 
-      // Export PDF
+      // Export PDF (fond blanc)
       function exportPDF(){
         if(!selectedNight) return;
         var grouped = (function(){
@@ -1047,7 +1072,7 @@
         parts.push('<style>:root{--bg:#ffffff;--fg:#111111;--muted:#444;--line:#e5e7eb}html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Inter,Helvetica Neue,Arial,Ubuntu;-webkit-print-color-adjust:exact;print-color-adjust:exact}.page{max-width:900px;margin:0 auto;padding:28px 22px}h1{font-size:28px;margin:0 0 8px 0}.meta{color:var(--muted);font-size:14px;margin-bottom:22px}h2.group{font-size:22px;margin:22px 0 10px 0;border-bottom:1px solid var(--line);padding-bottom:6px}.obj{padding:10px 0;border-bottom:1px dotted var(--line)}.obj:last-child{border-bottom:0}.objname{font-weight:700;font-size:16px;margin-bottom:2px}.row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted)}@page{size:A4;margin:14mm}</style></head><body><div class="page">');
 
         parts.push('<h1>Crazy Cloud — Liste d\'observation</h1>');
-        var meta=[]; if(info.location) meta.push(info.location); if(info.date) meta.push(info.date); if(info.time) meta.push(info.time); if(info.bortle!=null) meta.push("Bortle "+info.bortle); if(info.telescope) meta.push(info.telescope); if(scope) meta.push(Math.round(scope.aperture_mm)+"/"+Math.round(scope.focal_mm)+" mm (f/"+(scope.f_ratio).toFixed(1)+")");
+        var meta=[]; if(info.location) meta.push(info.location); if(info.date) meta.push(info.date); if(info.time) meta.push(info.time); if(info.bortle!=null) meta.push("Bortle "+info.bortle); if(info.telescope) meta.push(info.telescope); var scope = buildScope(info.diameter, info.focal); if(scope) meta.push(Math.round(scope.aperture_mm)+"/"+Math.round(scope.focal_mm)+" mm (f/"+(scope.f_ratio).toFixed(1)+")");
         parts.push('<div class="meta">'+meta.join(' • ')+'</div>');
 
         keys.forEach(function(k){
@@ -1069,24 +1094,6 @@
             if(bestF==="oiii") filt.push("OIII (meilleur)"); else if(recF.oiii) filt.push("OIII (conseillé)");
             if(bestF==="hbeta") filt.push("Hβ (meilleur)"); else if(recF.hbeta) filt.push("Hβ (conseillé)");
             if(filt.length) cols.push('<div><strong>Filtres:</strong> '+filt.join(', ')+'</div>');
-
-            // Oculaires (avec/ sans filtre)
-            var eps = Array.isArray(o.epIds)?o.epIds:[];
-            if(eps.length){
-              var recWith = recommendEyepieceId(scope, o.type||"", o.filters||{}, settings.eyepieces||[]);
-              var recNo   = recommendEyepieceId(scope, o.type||"", {}, settings.eyepieces||[]);
-              var epTxt = eps.map(function(id){
-                var ep=EP_MAP[id]; if(!ep) return null;
-                var mag = scope ? Math.round(scope.focal_mm / ep.focal) : null;
-                var base = ep.name+(ep.focal?(" "+ep.focal+"mm"):"")+(mag?(" ("+mag+"×)"):"");
-                var suffix="";
-                if(recWith && recNo && recWith===recNo && id===recWith) suffix=" (conseillé avec ou sans filtre)";
-                else if(recWith && id===recWith) suffix=" (conseillé avec filtre)";
-                else if(recNo && id===recNo) suffix=" (conseillé)";
-                return base+suffix;
-              }).filter(Boolean).join(', ');
-              if(epTxt) cols.push('<div><strong>Oculaires:</strong> '+epTxt.replace(/</g,"&lt;")+'</div>');
-            }
 
             parts.push('<div class="row">'+cols.join(' ')+'</div>');
             if(o.note){ parts.push('<div class="row" style="margin-top:6px"><div><strong>Note:</strong> '+String(o.note).replace(/</g,"&lt;")+'</div></div>'); }
@@ -1172,13 +1179,13 @@
 
           {/* Main */}
           <main className="flex-1 overflow-y-auto">
-            <div className="max-w-6xl mx-auto p-6">
+            <div className="max-w-6xl mx-auto p-4 sm:p-6">
               {!selectedNight ? (
                 <div className="text-center opacity-70">Sélectionnez une nuit dans la colonne de gauche.</div>
               ) : (
                 <div>
                   {/* En-tête */}
-                  <div className="rounded-xl border border-gray-800 bg-gray-900 p-5 mb-6">
+                  <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 sm:p-5 mb-6">
                     <div className="flex flex-wrap items-end justify-between gap-3">
                       <h1 className="text-2xl md:text-3xl font-semibold">
                         {selectedNight.location||("Nuit du "+(selectedNight.date||"—"))}
@@ -1221,11 +1228,6 @@
                               {!isCollapsed && (
                                 <div className="mt-2 space-y-3">
                                   {groups[key].map(function(obj){
-                                    var epSelected = Array.isArray(obj.epIds)? obj.epIds.map(function(id){ return settings.eyepieces.find(function(e){return e.id===id;}); }).filter(Boolean) : [];
-
-                                    var recWith = recommendEyepieceId(nightScope, obj.type||"", obj.filters||{}, settings.eyepieces||[]);
-                                    var recNo   = recommendEyepieceId(nightScope, obj.type||"", {}, settings.eyepieces||[]);
-
                                     var recF = recommendedFiltersForType(obj.type||"");
                                     var bestF = bestFilterForObject(obj);
                                     var filtTags=[];
@@ -1273,22 +1275,6 @@
                                           <div className="flex flex-col">
                                             <div className="opacity-70 text-xs uppercase tracking-wide">Sky Atlas</div>
                                             <div className="mt-1">{obj.pageAtlas || "—"}</div>
-                                          </div>
-                                          <div className="flex flex-col">
-                                            <div className="opacity-70 text-xs uppercase tracking-wide">Oculaires</div>
-                                            <div className="mt-1 flex flex-wrap gap-2">
-                                              {epSelected.length ? epSelected.map(function(ep){
-                                                var mag = nightScope ? Math.round(nightScope.focal_mm / (ep.focal||1)) : null;
-                                                var pill = ep.name+(ep.focal?(" "+ep.focal+"mm"):"")+(mag?(" ("+mag+"×)"):"");
-
-                                                var suffix="";
-                                                if(recWith && recNo && recWith===recNo && ep.id===recWith) suffix=" (conseillé avec ou sans filtre)";
-                                                else if(recWith && ep.id===recWith) suffix=" (conseillé avec filtre)";
-                                                else if(recNo && ep.id===recNo) suffix=" (conseillé)";
-
-                                                return <Tag key={ep.id}>{pill}{suffix}</Tag>;
-                                              }) : <span>—</span>}
-                                            </div>
                                           </div>
                                           <div className="flex flex-col">
                                             <div className="opacity-70 text-xs uppercase tracking-wide">Filtres (recommandés)</div>
