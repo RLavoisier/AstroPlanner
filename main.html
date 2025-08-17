@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Crazy Cloud Observation Planner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Tailwind (CDN pour dev) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 (dev) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <!-- Babel (JSX) -->
+  <script crossorigin src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+  <style>body{background:#0b0f19;color:#e5e7eb} body.modal-open{overflow:hidden}</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useMemo } = React;
+
+    // ---------------- Utils ----------------
+    function uid(){ return Math.floor(Math.random()*1e9).toString(36)+Date.now().toString(36); }
+    function normalizeName(s){ return String(s||"").toUpperCase().replace(/\s+/g,"").trim(); }
+    function fmt(num, digits){ if(num==null || isNaN(num)) return "—"; return Number(num).toFixed(digits); }
+    function hmsFromHours(h){
+      if(h==null || isNaN(h)) return "—";
+      var hh = Math.floor(h);
+      var mm = Math.floor((h - hh)*60);
+      var ss = Math.round(((h - hh)*60 - mm)*60);
+      if(ss===60){ ss=0; mm+=1; }
+      if(mm===60){ mm=0; hh+=1; }
+      return (String(hh).padStart(2,'0')+":"+String(mm).padStart(2,'0')+":"+String(ss).padStart(2,'0'));
+    }
+    function nf(n){ try{ return new Intl.NumberFormat('fr-FR').format(Math.round(n)); }catch(e){ return String(Math.round(n)); } }
+    function lyStr(n, approx){ if(n==null||isNaN(n)) return "—"; return (approx?"≈ ":"")+nf(n)+" a.l."; }
+    function Tag({ children }) {
+      return <span className="inline-block text-xs px-2 py-1 rounded bg-gray-800 border border-gray-700">{children}</span>;
+    }
+
+    function initialNight(){
+      return { id:uid(), date:"", time:"", location:"", lat:null, lon:null, bortle:4,
+               telescope:"", telescopeId:null, diameter:null, focal:null, meteo:"", objects:[] };
+    }
+    function parseNightDateTime(n){
+      if(!n || !n.date) return null;
+      var parts = n.date.split('-'); if(parts.length<3) return null;
+      var y=parseInt(parts[0],10), m=parseInt(parts[1],10), d=parseInt(parts[2],10);
+      if(!y||!m||!d) return null;
+      var h=0, min=0;
+      if(n.time && /^\d{2}:\d{2}/.test(n.time)){ var p=n.time.split(':'); h=parseInt(p[0],10)||0; min=parseInt(p[1],10)||0; }
+      return new Date(y, m-1, d, h, min, 0, 0);
+    }
+    function isPastNight(n){ var dt=parseNightDateTime(n); if(!dt) return false; return dt.getTime() < Date.now(); }
+
+    // ---------- Flash ----------
+    function Flash({ flash, onClose }) {
+      if (!flash) return null;
+      var color = flash.type==='error' ? 'bg-red-600' : 'bg-emerald-600';
+      return (
+        <div className={color+" text-white rounded-md px-4 py-2 shadow-md fixed top-4 right-4 z-[60]"}>
+          <div className="flex items-center gap-3">
+            <span>{flash.text}</span>
+            <button onClick={onClose} className="opacity-80 hover:opacity-100">✕</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- Modal ----------
+    function Modal({ open, title, children, onClose, onSubmit, submitLabel }) {
+      useEffect(function(){ document.body.classList.toggle('modal-open', open); return function(){ document.body.classList.remove('modal-open'); }; }, [open]);
+      if (!open) return null;
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={onClose}></div>
+          <div className="relative w-full max-w-3xl rounded-xl bg-gray-900 shadow-xl border border-gray-800 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">{title}</h3>
+              <button onClick={onClose} className="p-2 rounded hover:bg-gray-800" title="Fermer">✕</button>
+            </div>
+            <div className="space-y-4">{children}</div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={onClose} className="px-4 py-2 rounded border border-gray-700 hover:bg-gray-800">Annuler</button>
+              {onSubmit ? <button onClick={onSubmit} className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">{submitLabel||"Enregistrer"}</button> : null}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- Constellations ----------
+    const IAU_LAT = {And:"Andromeda",Ant:"Antlia",Aps:"Apus",Aql:"Aquila",Aqr:"Aquarius",Ara:"Ara",Ari:"Aries",Aur:"Auriga",
+      Boo:"Boötes",Cae:"Caelum",Cam:"Camelopardalis",Cap:"Capricornus",Car:"Carina",Cas:"Cassiopeia",Cen:"Centaurus",
+      Cep:"Cepheus",Cet:"Cetus",Cha:"Chamaeleon",Cir:"Circinus",CMa:"Canis Major",CMi:"Canis Minor",Cnc:"Cancer",
+      Col:"Columba",Com:"Coma Berenices",CrA:"Corona Australis",CrB:"Corona Borealis",Crt:"Crater",Cru:"Crux",
+      Crv:"Corvus",CVn:"Canes Venatici",Cyg:"Cygnus",Del:"Delphinus",Dor:"Dorado",Dra:"Draco",Equ:"Equuleus",
+      Eri:"Eridanus",For:"Fornax",Gem:"Gemini",Gru:"Grus",Her:"Hercules",Hor:"Horologium",Hya:"Hydra",Hyi:"Hydrus",
+      Ind:"Indus",Lac:"Lacerta",Leo:"Leo",Lep:"Lepus",Lib:"Libra",Lup:"Lupus",Lyn:"Lynx",Lyr:"Lyra",Men:"Mensa",
+      Mic:"Microscopium",Mon:"Monoceros",Mus:"Musca",Nor:"Norma",Oct:"Octans",Oph:"Ophiuchus",Ori:"Orion",Pav:"Pavo",
+      Peg:"Pegasus",Per:"Perseus",Phe:"Phoenix",Pic:"Pictor",PsA:"Piscis Austrinus",Psc:"Pisces",Pup:"Puppis",
+      Pyx:"Pyxis",Ret:"Reticulum",Scl:"Sculptor",Sco:"Scorpius",Sct:"Scutum",Ser:"Serpens",Sex:"Sextans",Sge:"Sagitta",
+      Sgr:"Sagittarius",Tau:"Taurus",Tel:"Telescopium",Tri:"Triangulum",TrA:"Triangulum Australe",Tuc:"Tucana",
+      UMa:"Ursa Major",UMi:"Ursa Minor",Vel:"Vela",Vir:"Virgo",Vol:"Volans",Vul:"Vulpecula"};
+    const IAU_FR = {And:"Andromède",Ant:"Machine pneumatique",Aps:"Oiseau de paradis",Aql:"Aigle",Aqr:"Verseau",Ara:"Autel",Ari:"Bélier",Aur:"Cocher",Boo:"Bouvier",Cae:"Burin",Cam:"Girafe",Cap:"Capricorne",Car:"Carène",Cas:"Cassiopée",Cen:"Centaure",Cep:"Céphée",Cet:"Baleine",Cha:"Caméléon",Cir:"Compas",CMa:"Grand Chien",CMi:"Petit Chien",Cnc:"Cancer",Col:"Colombe",Com:"Chevelure de Bérénice",CrA:"Couronne australe",CrB:"Couronne boréale",Crt:"Coupe",Cru:"Croix du Sud",Crv:"Corbeau",CVn:"Chiens de chasse",Cyg:"Cygne",Del:"Dauphin",Dor:"Dorade",Dra:"Dragon",Equ:"Petit Cheval",Eri:"Éridan",For:"Fourneau",Gem:"Gémeaux",Gru:"Grue",Her:"Hercule",Hor:"Horloge",Hya:"Hydre femelle",Hyi:"Hydre mâle",Ind:"Indien",Lac:"Lézard",Leo:"Lion",Lep:"Lièvre",Lib:"Balance",Lup:"Loup",Lyn:"Lynx",Lyr:"Lyre",Men:"Table",Mic:"Microscope",Mon:"Licorne",Mus:"Mouche",Nor:"Règle",Oct:"Octant",Oph:"Serpentaire",Ori:"Orion",Pav:"Paon",Peg:"Pégase",Per:"Persée",Phe:"Phénix",Pic:"Peintre",PsA:"Poisson austral",Psc:"Poissons",Pup:"Poupe",Pyx:"Boussole",Ret:"Réticule",Scl:"Sculpteur",Sco:"Scorpion",Sct:"Écu de Sobieski",Ser:"Serpent",Sex:"Sextant",Sge:"Flèche",Sgr:"Sagittaire",Tau:"Taureau",Tel:"Télescope",Tri:"Triangle",TrA:"Triangle austral",Tuc:"Toucan",UMa:"Grande Ourse",UMi:"Petite Ourse",Vel:"Voiles",Vir:"Vierge",Vol:"Poisson volant",Vul:"Renard"};
+    const FR_TO_ABBR = (function(){ var o={}; var entries=Object.entries(IAU_FR); for(var i=0;i<entries.length;i++){ o[entries[i][1].toLowerCase()] = entries[i][0]; } return o; })();
+    const VALID_ABBR = new Set(Object.keys(IAU_LAT));
+    function ensureConstAbbr(val){
+      if(!val) return "";
+      var s=String(val).trim();
+      s=s.replace(/cauda|caput|tail|head/gi," ").trim();
+      if(/^(sh|se)\s*2/i.test(s) || /\d/.test(s)) return "";
+      var compact=s.replace(/\s+/g,"");
+      if(VALID_ABBR.has(compact)) return compact;
+      var lower=s.toLowerCase(); if(FR_TO_ABBR[lower]) return FR_TO_ABBR[lower];
+      var map={Andromeda:"And",Antlia:"Ant",Apus:"Aps",Aquila:"Aql",Aquarius:"Aqr",Ara:"Ara",Aries:"Ari",Auriga:"Aur",Bootes:"Boo",Caelum:"Cae",Camelopardalis:"Cam",Capricornus:"Cap",Carina:"Car",Cassiopeia:"Cas",Centaurus:"Cen",Cepheus:"Cep",Cetus:"Cet",Chamaeleon:"Cha",Circinus:"Cir","Canis Major":"CMa","Canis Minor":"CMi",Cancer:"Cnc",Columba:"Col","Coma Berenices":"Com","Corona Australis":"CrA","Corona Borealis":"CrB",Crater:"Crt",Crux:"Cru",Corvus:"Crv","Canes Venatici":"CVn",Cygnus:"Cyg",Delphinus:"Del",Dorado:"Dor",Draco:"Dra",Equuleus:"Equ",Eridanus:"Eri",Fornax:"For",Gemini:"Gem",Grus:"Gru",Hercules:"Her",Horologium:"Hor","Hydra":"Hya","Hydrus":"Hyi",Indus:"Ind",Lacerta:"Lac",Leo:"Leo",Lepus:"Lep",Libra:"Lib",Lupus:"Lup",Lynx:"Lynx",Lyra:"Lyr",Mensa:"Men",Microscopium:"Mic",Monoceros:"Mon",Musca:"Mus",Norma:"Nor",Octans:"Oct",Ophiuchus:"Oph",Orion:"Ori",Pavo:"Pav",Pegasus:"Peg",Perseus:"Per",Phoenix:"Phe",Pictor:"Pic","Piscis Austrinus":"PsA",Pisces:"Psc",Puppis:"Pup",Pyxis:"Pyx",Reticulum:"Ret",Sculptor:"Scl",Scorpius:"Sco",Scutum:"Sct",Serpens:"Ser",Sextans:"Sex",Sagitta:"Sge",Sagittarius:"Sgr",Taurus:"Tau",Telescopium:"Tel",Triangulum:"Tri","Triangulum Australe":"TrA",Tucana:"Tuc","Ursa Major":"UMa","Ursa Minor":"UMi",Vela:"Vel",Virgo:"Vir",Volans:"Vol",Vulpecula:"Vul"};
+      var guess = map[s.replace(/\s+/g,"")]||"";
+      if(VALID_ABBR.has(guess)) return guess;
+      var keys = Object.keys(IAU_LAT);
+      for(var i=0;i<keys.length;i++){ var latin=IAU_LAT[keys[i]]; if(new RegExp("\\b"+latin+"\\b","i").test(s)) return keys[i]; }
+      return "";
+    }
+    function ensureConstLAT(val){ var abbr=ensureConstAbbr(val); return abbr? IAU_LAT[abbr] : (val?String(val):""); }
+    function prettyType(raw){
+      if(!raw) return "";
+      var t=String(raw).toLowerCase().replace(/[^a-z]/g,"");
+      var map={g:"Galaxie",gx:"Galaxie",galaxy:"Galaxie",gpair:"Paire de galaxies",gtrpl:"Triplet de galaxies",ggroup:"Groupe de galaxies",ocl:"Amas ouvert",gcl:"Amas globulaire",cln:"Amas + nébuleuse",pn:"Nébuleuse planétaire",hii:"Région H II",neb:"Nébuleuse",emn:"Nébuleuse en émission",rfn:"Nébuleuse par réflexion",drkn:"Nébuleuse obscure",dn:"Nébuleuse obscure",snr:"Rémanent de supernova",ast:"Astérisme",star:"Étoile",doublestar:"Étoile double"};
+      return map[t]||raw;
+    }
+    function displayConstellation(val, lang){
+      var ab = ensureConstAbbr(val);
+      if(ab){ return (lang==='fr' ? (IAU_FR[ab]||IAU_LAT[ab]) : (IAU_LAT[ab]||IAU_FR[ab]) ); }
+      return val||"";
+    }
+
+    // ---------- Champ helper ----------
+    function pickField(obj,names){
+      if(!obj) return "";
+      for(var i=0;i<names.length;i++){
+        var k=names[i];
+        if(Object.prototype.hasOwnProperty.call(obj,k) && obj[k]!=null && obj[k]!=="") return obj[k];
+        var foundKey=null, keys=Object.keys(obj);
+        for(var j=0;j<keys.length;j++){ var key=keys[j]; if(key.toLowerCase()===String(k).toLowerCase()){ foundKey=key; break; } }
+        if(foundKey && obj[foundKey]!=null && obj[foundKey]!=="") return obj[foundKey];
+      }
+      return "";
+    }
+
+    // ---------- Parse catalogue code ----------
+    function messierNumber(str){ if(!str) return null; var m = String(str).toUpperCase().match(/^M\s*([-+]?\d+)/); return m ? parseInt(m[1],10) : null; }
+    function ngcNumber(str){ if(!str) return null; var m = String(str).toUpperCase().match(/^NGC\s*-?\s*(\d+)/); return m ? parseInt(m[1],10) : null; }
+    function icNumber(str){  if(!str) return null; var m = String(str).toUpperCase().match(/^IC\s*-?\s*(\d+)/);  return m ? parseInt(m[1],10) : null; }
+    function looksLikeCatalogCode(s){ if(!s) return false; var t=String(s).trim(); return /^(M\s*\d+|NGC\s*-?\s*\d+|IC\s*-?\s*\d+|UGC\s*-?\s*\d+|PGC\s*-?\s*\d+|C\s*\d+|SH\s*2[\-\s]*\d+)/i.test(t); }
+
+    // ---------- Coord parsing ----------
+    function parseRAHours(v){
+      if(v==null || v==="") return null;
+      if(typeof v==="number"){ return (v>24)? (v/15) : v; }
+      var s=String(v).trim();
+      if(/^\d+(\.\d+)?$/.test(s)){ var n=parseFloat(s); return (n>24)?(n/15):n; }
+      var parts = s.replace(/[hms°'"]/g, ' ').replace(/\s+/g,' ').trim().split(' ');
+      if(parts.length>=1){ var hh=parseFloat(parts[0])||0, mm=parseFloat(parts[1])||0, ss=parseFloat(parts[2])||0; return hh + mm/60 + ss/3600; }
+      return null;
+    }
+    function parseDecDeg(v){
+      if(v==null || v==="") return null;
+      if(typeof v==="number") return v;
+      var s=String(v).trim();
+      if(/^[+\-]?\d+(\.\d+)?$/.test(s)) return parseFloat(s);
+      var sign = (s[0]==='-')?-1:1;
+      s=s.replace(/[hms°'"]/g, ' ').replace(/[+\-]/g,' ').trim();
+      var parts=s.split(/\s+/);
+      var dd=parseFloat(parts[0])||0, mm=parseFloat(parts[1])||0, ss=parseFloat(parts[2])||0;
+      return sign*(Math.abs(dd)+mm/60+ss/3600);
+    }
+    function extractCoords(f){
+      var raRaw = pickField(f,["ra","raj2000","ra_j2000","ra_deg","ra2000","right_ascension","ra_hours"]);
+      var decRaw= pickField(f,["dec","dej2000","dec_j2000","dec_deg","dec2000","declination"]);
+      return { raHours: (parseRAHours(raRaw)), decDeg: (parseDecDeg(decRaw)) };
+    }
+
+    // ---------- Distance helpers ----------
+    var C_KM_S = 299792.458;
+    var H0 = 70; // km/s/Mpc
+    function fromZtoLy(z){ if(z==null || isNaN(z)) return null; var d_mpc = z * (C_KM_S/H0); return d_mpc * 1e6 * 3.26156; }
+    function fromVtoLy(km_s){ if(km_s==null||isNaN(km_s)) return null; var d_mpc = km_s / H0; return d_mpc * 1e6 * 3.26156; }
+    function extractDistanceLyFromFields(f){
+      if(!f) return {ly:null, approx:false};
+      function num(x){ var n=parseFloat(String(x).replace(',', '.')); return isNaN(n)?null:n; }
+      var dl = pickField(f,["distance","distance_ly","dist_ly","distly","ly","distanceal","distance_a_l","distancealy"]);
+      var dly = num(dl); if(dly!=null && dly>0) return {ly:dly, approx:false};
+      var dk = num(pickField(f,["distance_kly","kly"])); if(dk!=null && dk>0) return {ly: dk*1000, approx:false};
+      var dm = num(pickField(f,["distance_mly","mly"])); if(dm!=null && dm>0) return {ly: dm*1e6, approx:false};
+      var pc  = num(pickField(f,["pc","parsec","distance_pc","distance_parsec"])); if(pc!=null && pc>0) return {ly: pc*3.26156, approx:false};
+      var kpc = num(pickField(f,["kpc","distance_kpc"])); if(kpc!=null && kpc>0) return {ly: kpc*1000*3.26156, approx:false};
+      var mpc = num(pickField(f,["mpc","distance_mpc"])); if(mpc!=null && mpc>0) return {ly: mpc*1e6*3.26156, approx:false};
+      var z = num(pickField(f,["redshift","z"])); if(z!=null && z>0){ var ly=fromZtoLy(z); if(ly!=null) return {ly:ly, approx:true}; }
+      var rv = num(pickField(f,["radvel","radial_velocity","radialvelocity","rv","vel"])); if(rv!=null && rv>0){ var ly2=fromVtoLy(rv); if(ly2!=null) return {ly:ly2, approx:true}; }
+      return {ly:null, approx:false};
+    }
+
+    // Wikidata backup
+    async function findDistanceLyWikidata(q){
+      try{
+        var r = await fetch("https://www.wikidata.org/w/api.php?action=wbsearchentities&search="+encodeURIComponent(q)+"&language=fr&format=json&origin=*");
+        if(!r.ok) return null;
+        var j = await r.json();
+        var id = (j && j.search && j.search[0] && j.search[0].id) ? j.search[0].id : null;
+        if(!id) return null;
+        var r2 = await fetch("https://www.wikidata.org/w/api.php?action=wbgetentities&ids="+encodeURIComponent(id)+"&props=claims&format=json&origin=*");
+        if(!r2.ok) return null;
+        var j2 = await r2.json();
+        var ent = j2 && j2.entities && j2.entities[id]; if(!ent) return null;
+        var cl = ent.claims && ent.claims.P2583; if(!cl || !cl.length) return null;
+        var snak = cl[0].mainsnak; if(!snak || !snak.datavalue) return null;
+        var val = snak.datavalue.value; if(!val || !val.amount) return null;
+        var amount = parseFloat(val.amount);
+        var unit = String(val.unit||"");
+        if(unit.indexOf("Q12129")>=0){ return {ly:amount, approx:true}; }
+        else if(unit.indexOf("Q12130")>=0){ return {ly:amount*3.26156, approx:true}; }
+        else if(unit.indexOf("Q200723")>=0){ return {ly:amount*1000*3.26156, approx:true}; }
+        else if(unit.indexOf("Q9038")>=0){ return {ly:amount*1e6*3.26156, approx:true}; }
+        else if(unit.indexOf("Q11573")>=0){ return {ly:amount/9.4607e15, approx:true}; }
+        else if(unit.indexOf("Q1812")>=0){ return {ly:amount/63241.077, approx:true}; }
+        return null;
+      }catch(e){ return null; }
+    }
+
+    // ---------- Datastro fetch ----------
+    async function fetchDatastro(dataset, params){
+      try{
+        var url = "https://www.datastro.eu/api/records/1.0/search/?dataset="+encodeURIComponent(dataset)+"&"+params;
+        var r = await fetch(url);
+        if(!r.ok) return null;
+        return await r.json();
+      }catch(e){ return null; }
+    }
+
+    async function enrichFromMessier(mNum){
+      try{
+        var j = await fetchDatastro("catalogue-de-messier", "rows=1&refine.m="+encodeURIComponent(mNum));
+        var f = (j && j.records && j.records[0] && j.records[0].fields) ? j.records[0].fields : null;
+        if(f){
+          var constAbbr=ensureConstAbbr(pickField(f,["constellation","constellation_en","constellation_fr","const"]));
+          var type   = prettyType(pickField(f,["type","type_fr","object_type"]));
+          var coords = extractCoords(f);
+          var common = pickField(f,["name_fr","popular_name_fr","name","common_name"]);
+          var dist = extractDistanceLyFromFields(f);
+          return { constellation: constAbbr? IAU_LAT[constAbbr]:"", type:type, raHours:coords.raHours, decDeg:coords.decDeg, commonName:common||"", distanceLy:dist.ly, distanceApprox:dist.approx };
+        }
+      }catch(e){}
+      return null;
+    }
+
+    function buildLabelFromFields(f){
+      function messierLabel(m){
+        if(m==null) return null;
+        var s=String(m).trim().toUpperCase();
+        if(s.indexOf("M")===0) return s;
+        if(/^\d+$/.test(s)) return "M"+s;
+        return s;
+      }
+      var m=f.m||f.messier;
+      var mLab=messierLabel(m);
+      var ngc=f.ngc?("NGC "+f.ngc):((f.name&&/^NGC/i.test(f.name))?String(f.name).toUpperCase():"");
+      var ic =f.ic ?("IC "+f.ic ):((f.name&&/^IC/i.test(f.name) )?String(f.name).toUpperCase() :"");
+      var main=mLab||ngc||ic||(f.name||"");
+      var second=mLab?(ngc||ic||(f.name||"")):((ngc&&ic)?(ngc+" / "+ic):(ngc||ic||""));
+      var typePretty=prettyType(pickField(f,["type","object_type","otype"]));
+      var constAbbr=ensureConstAbbr(pickField(f,["constellation","constellation_en","constellation_fr","constabbr","con","const"]));
+      var constLAT = constAbbr?IAU_LAT[constAbbr]:"";
+      var coords=extractCoords(f);
+      var common=pickField(f,["name_fr","popular_name_fr","name","common_name","proper_name"]);
+      var dist = extractDistanceLyFromFields(f);
+
+      var extras = []; if(second) extras.push(second); if(typePretty) extras.push(typePretty); if(constLAT) extras.push(constLAT); if(common) extras.push(common);
+      var label = main + (extras.length?(" — "+extras.join(" — ")):"");
+      return {
+        label:label, nom:main, type:typePretty||"", typeCode:f.type||"", constellation:constLAT||"",
+        raHours:coords.raHours, decDeg:coords.decDeg, commonName:(looksLikeCatalogCode(common)? "":(common||"")),
+        distanceLy: dist.ly, distanceApprox: dist.approx
+      };
+    }
+
+    async function searchSkyObjectsDatastro(query){
+      if(!query||query.length<1) return [];
+      var q = String(query).trim();
+
+      var results = []; var seen = new Set();
+      function pushItem(item){ var key = normalizeName(item.nom||item.label||""); if(!key || seen.has(key)) return; results.push(item); seen.add(key); }
+
+      var mNum = messierNumber(q);
+      var nNum = ngcNumber(q);
+      var iNum = icNumber(q);
+
+      try{
+        if(nNum!=null){
+          var jn = await fetch("https://www.datastro.eu/api/records/1.0/search/?dataset=ngc-ic-messier-catalog&rows=8&refine.ngc="+encodeURIComponent(nNum));
+          if(jn.ok){ var jnd=await jn.json(); var recs=(jnd&&jnd.records)?jnd.records:[]; recs.map(function(r){return r.fields||{};}).forEach(function(f){ pushItem(buildLabelFromFields(f)); }); }
+        }
+      }catch(e){}
+      try{
+        if(iNum!=null){
+          var ji = await fetch("https://www.datastro.eu/api/records/1.0/search/?dataset=ngc-ic-messier-catalog&rows=8&refine.ic="+encodeURIComponent(iNum));
+          if(ji.ok){ var jid=await ji.json(); var recs=(jid&&jid.records)?jid.records:[]; recs.map(function(r){return r.fields||{};}).forEach(function(f){ pushItem(buildLabelFromFields(f)); }); }
+        }
+      }catch(e){}
+      try{
+        if(mNum!=null){
+          var jm = await fetch("https://www.datastro.eu/api/records/1.0/search/?dataset=catalogue-de-messier&rows=5&refine.m="+encodeURIComponent(mNum));
+          if(jm.ok){
+            var jmd=await jm.json(); var recs=(jmd&&jmd.records)?jmd.records:[];
+            recs.forEach(function(rec){
+              var f=rec.fields||{};
+              var ngc = pickField(f,["ngc"]) ? ("NGC "+f.ngc) : "";
+              var ic  = pickField(f,["ic"])  ? ("IC "+f.ic ) : "";
+              var main = "M"+mNum;
+              var second = (ngc && ic) ? (ngc+" / "+ic) : (ngc || ic || "");
+              var typePretty = prettyType(pickField(f,["type","type_fr","object_type"]));
+              var constAbbr  = ensureConstAbbr(pickField(f,["constellation","constellation_en","constellation_fr","const"]));
+              var constLAT   = constAbbr? IAU_LAT[constAbbr] : "";
+              var coords = extractCoords(f);
+              var common = pickField(f,["name_fr","popular_name_fr","name","common_name"]);
+              var dist = extractDistanceLyFromFields(f);
+              var extras = []; if(second) extras.push(second); if(typePretty) extras.push(typePretty); if(constLAT) extras.push(constLAT); if(common) extras.push(common);
+              var label = main + (extras.length?(" — "+extras.join(" — ")):"");
+              pushItem({ label:label, nom:main, type:typePretty||"", constellation:constLAT||"", raHours:coords.raHours, decDeg:coords.decDeg, commonName:common||"", distanceLy:dist.ly, distanceApprox:dist.approx });
+            });
+          }
+        }
+      }catch(e){}
+
+      var variants = [ q ];
+      var compact = q.replace(/\s+/g,''); if(compact!==q) variants.push(compact);
+      function addVariants(prefix, num){ if(num==null) return; variants.push(prefix+" "+num); variants.push(prefix+num); variants.push(prefix+"-"+num); }
+      addVariants("NGC", nNum); addVariants("IC", iNum); addVariants("M", mNum);
+
+      var used = new Set();
+      for(var i=0;i<variants.length && i<4;i++){
+        var v = variants[i]; if(used.has(v)) continue; used.add(v);
+        try{
+          var r=await fetch("https://www.datastro.eu/api/records/1.0/search/?dataset=ngc-ic-messier-catalog&q="+encodeURIComponent(v)+"&rows=8");
+          if(r.ok){ var json=await r.json(); var recs=(json&&json.records)?json.records:[]; recs.map(function(rec){return rec.fields||{};}).forEach(function(f){ pushItem(buildLabelFromFields(f)); }); }
+        }catch(e){}
+      }
+      return results;
+    }
+
+    // ---------- Thumbnails (Wikipedia) ----------
+    function isMessierLabel(s){ if(!s) return false; return /^M\s*\d+$/i.test(String(s).trim()); }
+    function messierToPhrase(s){ var m = String(s).trim().match(/^M\s*(\d+)$/i); if(!m) return s; return "Messier "+m[1]; }
+    function wikiSearchURL(q, lang){
+      var base="https://"+lang+".wikipedia.org/w/api.php";
+      var params=["action=query","format=json","origin=*","prop=pageimages|pageprops","piprop=thumbnail","pithumbsize=160","pilicense=any","generator=search","gsrlimit=1","gsrsearch="+encodeURIComponent(q)].join("&");
+      return base+"?"+params;
+    }
+    async function wikiThumbSearch(q){
+      var langs=["en","fr"];
+      for(var i=0;i<langs.length;i++){
+        var url=wikiSearchURL(q, langs[i]);
+        try{
+          var r=await fetch(url);
+          if(!r.ok) continue;
+          var j=await r.json();
+          if(j && j.query && j.query.pages){
+            var pages=j.query.pages;
+            var keys=Object.keys(pages); if(keys.length){
+              var p=pages[keys[0]];
+              if(p && p.thumbnail && p.thumbnail.source) return p.thumbnail.source;
+            }
+          }
+        }catch(e){}
+      }
+      return null;
+    }
+    async function findThumbnailForObject(obj){
+      var queries=[];
+      if(obj && obj.nom){
+        var nom=String(obj.nom).trim();
+        if(isMessierLabel(nom)) queries.push(messierToPhrase(nom));
+        queries.push(nom);
+      }
+      if(obj && obj.commonName){ queries.push(String(obj.commonName).trim()); }
+      if(obj && obj.type){
+        var t=String(obj.type).toLowerCase();
+        if(isMessierLabel(obj.nom)) queries.push(messierToPhrase(obj.nom)+" "+t);
+        if(obj.nom) queries.push(obj.nom+" "+t);
+      }
+      if(obj && obj.nom){ queries.push(obj.nom+" astronomy"); }
+      for(var i=0;i<queries.length;i++){ var u=await wikiThumbSearch(queries[i]); if(u) return u; }
+      return null;
+    }
+
+    // ---------- Villes ----------
+    async function searchCitiesGeoDB(query){
+      if(!query||query.length<2) return [];
+      try{
+        var geodbURL="https://geodb-free-service.wirefreethought.com/v1/geo/cities?namePrefix="+encodeURIComponent(query)+"&limit=8&sort=-population";
+        var r=await fetch(geodbURL);
+        if(r.ok){
+          var j=await r.json(); var d=(j&&j.data)?j.data:[];
+          if(d.length){ return d.map(function(c){ return {label:c.city+", "+c.country, city:c.city, country:c.country, lat:c.latitude, lon:c.longitude}; }); }
+        }
+      }catch(e){}
+      try{
+        var omURL="https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(query)+"&count=8&language=fr&format=json";
+        var r2=await fetch(omURL);
+        if(!r2.ok) return [];
+        var j2=await r2.json(); var res=(j2&&j2.results)?j2.results:[];
+        return res.map(function(c){ return {label:c.name+(c.country?(", "+c.country):""), city:c.name, country:c.country||"", lat:c.latitude, lon:c.longitude}; });
+      }catch(e){ return []; }
+    }
+
+    // ---------- Scope & oculaires ----------
+    function buildScope(diameter, focal){ var D=Number(diameter), F=Number(focal); if(!D||!F||D<=0||F<=0) return null; return { aperture_mm:D, focal_mm:F, f_ratio:F/D }; }
+    function exitPupilRangeFor(type, filters){
+      var t=(type||"").toLowerCase(); var range=[2,4];
+      if(t.indexOf("planétaire")>=0 || t.indexOf("planetaryneb")>=0) range=[0.8,1.5];
+      else if(t.indexOf("étoile double")>=0 || t.indexOf("double")>=0) range=[0.5,1.2];
+      else if(t.indexOf("globul")>=0) range=[1,1.8];
+      else if(t.indexOf("galax")>=0) range=[1.5,3];
+      else if(t.indexOf("amas ouvert")>=0 || t.indexOf("open")>=0) range=[2.5,5];
+      else if(t.indexOf("h ii")>=0 || t.indexOf("émission")>=0 || t.indexOf("neb")>=0 || t.indexOf("nébuleuse")>=0) range=[3,5.5];
+      var hasStrong = filters && (filters.oiii || filters.hbeta || filters.uhc);
+      if(hasStrong){ var addMin = (filters.hbeta?4:3.5); var addMax = (filters.hbeta?6.5:6); range=[Math.max(range[0], addMin), Math.max(range[1], addMax)]; }
+      range[0]=Math.max(0.5, range[0]); range[1]=Math.min(7, range[1]); if(range[1]<range[0]) range=[range[0], range[0]];
+      return range;
+    }
+    function roundListToCommonFL(minFL, maxFL){
+      var commons=[40,38,35,32,31,30,28,27,26,25,24,22,21,20,19,18,17,16,15,14,13,12.5,12,11,10,9,8,7,6,5,4.5,4,3.5,3];
+      var pick=commons.filter(function(x){return x>=minFL-0.5 && x<=maxFL+0.5;});
+      if(pick.length===0){ var target=(minFL+maxFL)/2; var best=commons[0], d=Infinity; for(var i=0;i<commons.length;i++){ var x=commons[i], dd=Math.abs(x-target); if(dd<d){d=dd; best=x;} } return [best]; }
+      if(pick.length>3){ var a=pick[0], b=pick[Math.floor(pick.length/2)], c=pick[pick.length-1]; return Array.from(new Set([a,b,c])); }
+      return pick;
+    }
+    function suggestionForScopeAndObject(scope, objType, filters){
+      if(!scope) return null;
+      var focal_mm = scope.focal_mm, f_ratio = scope.f_ratio;
+      var r = exitPupilRangeFor(objType, filters);
+      var eflMin = r[0]*f_ratio, eflMax = r[1]*f_ratio;
+      var picks = roundListToCommonFL(eflMin, eflMax);
+      var mags = picks.map(function(fl){ return { fl:fl, mag: Math.round(focal_mm / fl) }; });
+      var maxPick = Math.max.apply(null,picks);
+      var minPick = Math.min.apply(null,picks);
+      return { picks:mags, rangeTxt:Math.round(eflMin)+"–"+Math.round(eflMax)+" mm", magTxt:Math.round(focal_mm/maxPick)+"–"+Math.round(focal_mm/minPick)+"×", epTxt:r[0].toFixed(1)+"–"+r[1].toFixed(1)+" mm", eflMin:eflMin, eflMax:eflMax, center:(eflMin+eflMax)/2 };
+    }
+    function recommendEyepieceId(scope, objType, filters, eyepieces){
+      if(!scope || !eyepieces || eyepieces.length===0) return null;
+      var sug = suggestionForScopeAndObject(scope, objType, filters); if(!sug) return null;
+      var center=sug.center, min=sug.eflMin, max=sug.eflMax;
+      var best=null, bestScore=Infinity;
+      eyepieces.forEach(function(ep){
+        var fl=Number(ep.focal)||0; if(fl<=0) return;
+        var dist; if(fl<min) dist=(min-fl)+0.1; else if(fl>max) dist=(fl-max)+0.1; else dist=Math.abs(fl-center);
+        if(dist<bestScore){ bestScore=dist; best=ep; }
+      });
+      return best ? best.id : null;
+    }
+
+    // ---------- Reco Filtres ----------
+    function recommendedFiltersForType(objType){
+      var t = String(objType||"").toLowerCase();
+      if (t.includes("planétaire") || t.includes("planetary")) return { uhc:true, oiii:true, hbeta:true };
+      if (t.includes("h ii") || t.includes("hii") || t.includes("émission") || t.includes("emission")) return { uhc:true, oiii:true, hbeta:true };
+      if (t.includes("rémanent") || t.includes("remnant") || t.includes("snr")) return { uhc:false, oiii:true, hbeta:false };
+      if (t.includes("réflexion") || t.includes("reflection")) return { uhc:false, oiii:false, hbeta:false };
+      if (t.includes("obscur") || t.includes("dark")) return { uhc:false, oiii:false, hbeta:false };
+      if (t.includes("galax") || t.includes("amas") || t.includes("cluster") || t.includes("étoile") || t.includes("star")) return { uhc:false, oiii:false, hbeta:false };
+      return { uhc:false, oiii:false, hbeta:false };
+    }
+    function bestFilterForObject(obj){
+      var t = String((obj && obj.type) || "").toLowerCase();
+      var name = String((obj && (obj.commonName || obj.nom)) || "").toLowerCase();
+      var hbetaHits = ["california","ngc 1499","horsehead","tête de cheval","ic 434","b33","barnard's loop","boucle de barnard"];
+      for (var i=0;i<hbetaHits.length;i++){ if (name.indexOf(hbetaHits[i]) >= 0) return "hbeta"; }
+      if (t.includes("planétaire") || t.includes("planetary")) return "oiii";
+      if (t.includes("snr") || t.includes("rémanent") || t.includes("remnant")) return "oiii";
+      if (t.includes("h ii") || t.includes("hii") || t.includes("émission") || t.includes("emission")) return "uhc";
+      if (t.includes("nébuleuse") || t.includes("neb")) return "uhc";
+      return null;
+    }
+
+    // ---------- AutoComplete ----------
+    function AutoCompleteInput({ value, setValue, placeholder, fetcher, onPick }) {
+      var [q,setQ]=useState(value||"");
+      var [items,setItems]=useState([]);
+      var [open,setOpen]=useState(false);
+      var [loading,setLoading]=useState(false);
+
+      useEffect(function(){ setQ(value||""); },[value]);
+
+      async function handleChange(v){
+        setQ(v);
+        if(setValue) setValue(v);
+        if(v && v.length>=1){
+          setLoading(true);
+          var res=await fetcher(v);
+          setItems(res);
+          setLoading(false);
+          setOpen(true);
+        }else{ setItems([]); setOpen(false); }
+      }
+      async function pick(item){
+        var label=(item&&item.label)?item.label:item;
+        setQ(label);
+        if(setValue) setValue(label);
+        if(onPick) await onPick(item);
+        setOpen(false);
+      }
+
+      return (
+        <div className="relative">
+          <input
+            className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder={placeholder}
+            value={q}
+            onChange={function(e){handleChange(e.target.value);}}
+            onFocus={function(){ if(q && q.length>=1) setOpen(true); }}
+            autoComplete="off"
+          />
+          {loading ? <div className="absolute right-3 top-2.5 text-sm opacity-70">…</div> : null}
+          {open && items.length>0 ? (
+            <div className="absolute mt-1 w-full max-h-56 overflow-auto rounded-md border border-gray-700 bg-gray-900 shadow-lg z-10">
+              {items.map(function(it,i){
+                return (
+                  <button key={i} className="w-full text-left px-3 py-2 hover:bg-gray-800" onClick={function(){ pick(it); }} type="button">
+                    {(typeof it==="string")?it:it.label}
+                  </button>
+                );
+              })}
+            </div>
+          ):null}
+        </div>
+      );
+    }
+
+    // ---------- Forms ----------
+    function NightForm({ draft, setDraft, telescopes }) {
+      function onPickTelescopeId(id){
+        var t = telescopes.find(function(x){return x.id===id;});
+        if(t){ setDraft({...draft, telescopeId:t.id, telescope:t.name, diameter:t.diameter||null, focal:t.focal||null}); }
+        else{ setDraft({...draft, telescopeId:null}); }
+      }
+      return (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div><label className="block text-sm mb-1">Date</label>
+            <input type="date" value={draft.date} onChange={function(e){setDraft({...draft, date:e.target.value});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
+          <div><label className="block text-sm mb-1">Heure de début</label>
+            <input type="time" value={draft.time} onChange={function(e){setDraft({...draft, time:e.target.value});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
+          <div className="md:col-span-2"><label className="block text-sm mb-1">Lieu (auto-complétion)</label>
+            <AutoCompleteInput value={draft.location} setValue={function(v){setDraft({...draft, location:v});}} placeholder="Ville, Pays" fetcher={searchCitiesGeoDB}
+              onPick={function(item){ setDraft({...draft, location:item?item.label:draft.location, lat:(item&&item.lat)||null, lon:(item&&item.lon)||null}); }}/></div>
+          <div><label className="block text-sm mb-1">Bortle</label>
+            <select value={draft.bortle} onChange={function(e){setDraft({...draft, bortle:parseInt(e.target.value,10)});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2">{[1,2,3,4,5,6,7,8,9].map(function(v){return <option key={v} value={v}>Bortle {v}</option>;})}</select></div>
+          <div><label className="block text-sm mb-1">Télescope (Paramètres)</label>
+            <select value={draft.telescopeId||""} onChange={function(e){onPickTelescopeId(e.target.value||null);}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2">
+              <option value="">— Aucun</option>{telescopes.map(function(t){return <option key={t.id} value={t.id}>{t.name}</option>;})}
+            </select></div>
+          <div><label className="block text-sm mb-1">Nom (affiché)</label>
+            <input value={draft.telescope||""} onChange={function(e){setDraft({...draft, telescope:e.target.value});}} placeholder="Ex: Flextube 400, C8 Edge…" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
+          <div><label className="block text-sm mb-1">Diamètre (mm)</label>
+            <input type="number" min="20" step="1" value={(draft.diameter!=null?draft.diameter:"")} onChange={function(e){setDraft({...draft, diameter:e.target.value?Number(e.target.value):null});}} placeholder="Ex: 400" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
+          <div><label className="block text-sm mb-1">Focale (mm)</label>
+            <input type="number" min="100" step="1" value={(draft.focal!=null?draft.focal:"")} onChange={function(e){setDraft({...draft, focal:e.target.value?Number(e.target.value):null});}} placeholder="Ex: 1800" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
+          <div className="md:col-span-2"><label className="block text-sm mb-1">Météo (libre)</label>
+            <input value={draft.meteo} onChange={function(e){setDraft({...draft, meteo:e.target.value});}} placeholder="Ex: ciel dégagé, 12°C, vent faible" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
+        </div>
+      );
+    }
+
+    // ---------- Object form ----------
+    function ObjectForm({ draft, setDraft, errors, nightScope, eyepieces, openSettings }) {
+      var errNom = errors && errors.nom;
+      var errCon = errors && errors.constellation;
+      var filters = draft.filters || { uhc:false, oiii:false, hbeta:false };
+
+      var eyeHint = useMemo(function(){
+        if(!nightScope) return "Renseignez le télescope (Diamètre/Focale) dans l’en-tête pour des conseils pertinents.";
+        var s1 = suggestionForScopeAndObject(nightScope, draft.type||"", filters);
+        var s0 = suggestionForScopeAndObject(nightScope, draft.type||"", {});
+        if(!s1 && !s0) return "Pas de suggestion disponible.";
+        if(s1 && s0){
+          return "Sans filtre: "+s0.rangeTxt+" ("+s0.magTxt+"), avec filtre: "+s1.rangeTxt+" ("+s1.magTxt+")";
+        }
+        var s = s1||s0;
+        return "Plage conseillée: "+s.rangeTxt+" ("+s.magTxt+") — Pupille "+s.epTxt;
+      }, [nightScope && nightScope.focal_mm, nightScope && nightScope.f_ratio, draft.type, filters.uhc, filters.oiii, filters.hbeta]);
+
+      var filterHint = useMemo(function(){
+        var rec = recommendedFiltersForType(draft.type||"");
+        var best = bestFilterForObject(draft);
+        var out=[];
+        if(best==="uhc") out.push("UHC (meilleur)"); else if(rec.uhc) out.push("UHC (conseillé)");
+        if(best==="oiii") out.push("OIII (meilleur)"); else if(rec.oiii) out.push("OIII (conseillé)");
+        if(best==="hbeta") out.push("Hβ (meilleur)"); else if(rec.hbeta) out.push("Hβ (conseillé)");
+        return out.length? out.join(" • ") : "Aucun filtre recommandé pour ce type.";
+      }, [draft.type, draft.nom, draft.commonName]);
+
+      return (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm mb-1">Nom / Désignation <span className="text-red-400">*</span></label>
+            <AutoCompleteInput
+              value={draft.nom}
+              setValue={function(v){setDraft({...draft, nom:v});}}
+              placeholder="Ex: M42, NGC 6992, Saturne…"
+              fetcher={searchSkyObjectsDatastro}
+              onPick={async function(item){
+                var nom=(item&&item.nom)?item.nom:draft.nom;
+                var type=(item&&item.type)?item.type:draft.type;
+                var constellation=(item&&item.constellation)?item.constellation:draft.constellation;
+                var commonName=(item&&item.commonName)?item.commonName:draft.commonName;
+                var raHours=(item&&item.raHours!=null)?item.raHours:draft.raHours;
+                var decDeg =(item&&item.decDeg!=null)?item.decDeg:draft.decDeg;
+                var distanceLy=(item&&item.distanceLy!=null)?item.distanceLy:draft.distanceLy;
+                var distanceApprox=(item&&item.distanceApprox===true)?true:draft.distanceApprox===true;
+
+                if(!constellation || !type || raHours==null || decDeg==null || !commonName || distanceLy==null){
+                  var extra=await enrichObjectDetails(nom);
+                  if(!constellation) constellation=extra.constellation;
+                  if(!type) type=extra.type;
+                  if(raHours==null) raHours=extra.raHours;
+                  if(decDeg==null) decDeg=extra.decDeg;
+                  if(!commonName) commonName=extra.commonName;
+                  if(distanceLy==null){ distanceLy=extra.distanceLy; distanceApprox = extra.distanceApprox===true; }
+                }
+                constellation = ensureConstLAT(constellation);
+                setDraft({...draft, nom:nom, type:type, constellation:constellation, raHours:raHours, decDeg:decDeg, commonName:commonName, distanceLy:distanceLy, distanceApprox:distanceApprox});
+              }}
+            />
+            {errNom ? <p className="text-sm text-red-400 mt-1">{errNom}</p> : null}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm mb-1">Constellation <span className="text-red-400">*</span></label>
+              <input value={draft.constellation||""} onChange={function(e){setDraft({...draft, constellation:e.target.value});}} className={(errCon?"border-red-500 ":"border-gray-700 ")+"w-full rounded-md border px-3 py-2 bg-gray-800"}/>
+              {errCon ? <p className="text-sm text-red-400 mt-1">{errCon}</p> : null}
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Type</label>
+              <input value={draft.type||""} onChange={function(e){setDraft({...draft, type:e.target.value});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm mb-1">Page Sky Atlas</label>
+              <input value={draft.pageAtlas||""} onChange={function(e){setDraft({...draft, pageAtlas:e.target.value});}} placeholder="Ex: Uranometria p.123" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+            </div>
+            <div>
+              <label className="block text-sm mb-1">AD (h)</label>
+              <input value={(draft.raHours!=null?draft.raHours:"")} onChange={function(e){var v=e.target.value; setDraft({...draft, raHours:(v===""?null:Number(v))});}} placeholder="Ex: 5.59" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Déc (°)</label>
+              <input value={(draft.decDeg!=null?draft.decDeg:"")} onChange={function(e){var v=e.target.value; setDraft({...draft, decDeg:(v===""?null:Number(v))});}} placeholder="Ex: -5.45" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm mb-1">Filtres optimaux (cocher si tu comptes les utiliser)</label>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2"><input type="checkbox" checked={!!(draft.filters && draft.filters.uhc)} onChange={function(e){setDraft({...draft, filters:{...(draft.filters||{}), uhc:e.target.checked}});}}/><span>UHC</span></label>
+              <label className="flex items-center gap-2"><input type="checkbox" checked={!!(draft.filters && draft.filters.oiii)} onChange={function(e){setDraft({...draft, filters:{...(draft.filters||{}), oiii:e.target.checked}});}}/><span>OIII</span></label>
+              <label className="flex items-center gap-2"><input type="checkbox" checked={!!(draft.filters && draft.filters.hbeta)} onChange={function(e){setDraft({...draft, filters:{...(draft.filters||{}), hbeta:e.target.checked}});}}/><span>Hβ</span></label>
+            </div>
+            <div className="text-xs opacity-70 mt-1">Conseils : {filterHint}</div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm mb-1">Distance (années-lumière)</label>
+              <input type="number" step="1" min="0" value={(draft.distanceLy!=null?Math.round(draft.distanceLy):"")} onChange={function(e){var v=e.target.value; setDraft({...draft, distanceLy:(v===""?null:Number(v)), distanceApprox:false});}} placeholder="Ex: 5200" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+              {draft.distanceApprox ? <div className="text-xs opacity-70 mt-1">≈ valeur estimée (redshift/rv/Wikidata)</div> : null}
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Note</label>
+              <textarea value={draft.note||""} onChange={function(e){setDraft({...draft, note:e.target.value});}} rows="3" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"></textarea>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="block text-sm mb-1">Oculaires (Paramètres)</label>
+              <div className="text-xs opacity-70">
+                {(!nightScope) ? "Renseignez le télescope (Diamètre/Focale) pour des conseils." :
+                 (function(){var s1=suggestionForScopeAndObject(nightScope, draft.type||"", draft.filters||{}); var s0=suggestionForScopeAndObject(nightScope, draft.type||"", {}); if(s1&&s0){return "Sans filtre: "+s0.rangeTxt+" ("+s0.magTxt+"), avec filtre: "+s1.rangeTxt+" ("+s1.magTxt+")"} return s1?("Plage: "+s1.rangeTxt+" ("+s1.magTxt+") — Pupille "+s1.epTxt):"Pas de suggestion.";}())}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- Enrichissement objet ----------
+    async function enrichObjectDetails(mainName){
+      var mN = messierNumber(mainName);
+      var nN = ngcNumber(mainName);
+      var iN = icNumber(mainName);
+
+      if(nN!=null){
+        try{
+          var jn = await fetchDatastro("ngc-ic-messier-catalog","rows=1&refine.ngc="+encodeURIComponent(nN));
+          var fn = (jn && jn.records && jn.records[0] && jn.records[0].fields) ? jn.records[0].fields : null;
+          if(fn){
+            var ca=ensureConstAbbr(pickField(fn,["constellation","const","constabbr","con"]));
+            var tp=prettyType(pickField(fn,["type","object_type","otype"]));
+            var cd=extractCoords(fn);
+            var cn=pickField(fn,["name_fr","popular_name_fr","name","common_name","proper_name"]);
+            var dist = extractDistanceLyFromFields(fn);
+            return { constellation: ca?IAU_LAT[ca]:"", type:tp, raHours:cd.raHours, decDeg:cd.decDeg, commonName:(looksLikeCatalogCode(cn)?"":(cn||"")), distanceLy:dist.ly, distanceApprox:dist.approx };
+          }
+        }catch(e){}
+      }
+      if(iN!=null){
+        try{
+          var ji = await fetchDatastro("ngc-ic-messier-catalog","rows=1&refine.ic="+encodeURIComponent(iN));
+          var fi = (ji && ji.records && ji.records[0] && ji.records[0].fields) ? ji.records[0].fields : null;
+          if(fi){
+            var ca=ensureConstAbbr(pickField(fi,["constellation","const","constabbr","con"]));
+            var tp=prettyType(pickField(fi,["type","object_type","otype"]));
+            var cd=extractCoords(fi);
+            var cn=pickField(fi,["name_fr","popular_name_fr","name","common_name","proper_name"]);
+            var dist = extractDistanceLyFromFields(fi);
+            return { constellation: ca?IAU_LAT[ca]:"", type:tp, raHours:cd.raHours, decDeg:cd.decDeg, commonName:(looksLikeCatalogCode(cn)?"":(cn||"")), distanceLy:dist.ly, distanceApprox:dist.approx };
+          }
+        }catch(e){}
+      }
+      if(mN!=null){
+        var ex = await enrichFromMessier(mN);
+        if(ex) return ex;
+      }
+
+      try{
+        var j = await fetchDatastro("ngc-ic-messier-catalog","q="+encodeURIComponent(mainName)+"&rows=1");
+        var f=(j && j.records && j.records[0] && j.records[0].fields) ? j.records[0].fields : null;
+        if(f){
+          var constAbbr=ensureConstAbbr(pickField(f,["constellation","constellation_en","constellation_fr","constabbr","con","const"]));
+          var type=prettyType(pickField(f,["type","object_type","otype"]));
+          var coords=extractCoords(f);
+          var common=pickField(f,["name_fr","popular_name_fr","name","common_name","proper_name"]);
+          var dist = extractDistanceLyFromFields(f);
+          var out = { constellation: constAbbr?IAU_LAT[constAbbr]:"", type:type, raHours:coords.raHours, decDeg:coords.decDeg, commonName:(looksLikeCatalogCode(common)?"":(common||"")), distanceLy:dist.ly, distanceApprox:dist.approx };
+
+          if(mN!=null){
+            var extra = await enrichFromMessier(mN);
+            if(extra){
+              out.constellation = out.constellation || extra.constellation;
+              out.type = out.type || extra.type;
+              if(out.raHours==null) out.raHours = extra.raHours;
+              if(out.decDeg==null) out.decDeg = extra.decDeg;
+              if(!out.commonName) out.commonName = extra.commonName;
+              if(out.distanceLy==null){ out.distanceLy = extra.distanceLy; out.distanceApprox = extra.distanceApprox; }
+            }
+          }
+
+          if(out.distanceLy==null){
+            var w = await findDistanceLyWikidata(mainName);
+            if(!w && mN!=null) w = await findDistanceLyWikidata("Messier "+mN);
+            if(!w && nN!=null) w = await findDistanceLyWikidata("NGC "+nN);
+            if(!w && iN!=null) w = await findDistanceLyWikidata("IC "+iN);
+            if(w){ out.distanceLy = w.ly; out.distanceApprox = true; }
+          }
+
+          return out;
+        }
+      }catch(e){}
+      return {constellation:"",type:"",raHours:null,decDeg:null, commonName:"", distanceLy:null, distanceApprox:false};
+    }
+
+    // ---------- Paramètres ----------
+    function SettingsModal({ open, onClose, settings, onSave }){
+      var [telescopes,setTelescopes]=useState(settings.telescopes.slice());
+      var [eyepieces,setEyepieces]=useState(settings.eyepieces.slice());
+      var [constLang,setConstLang]=useState(settings.displayConstellation||'latin');
+
+      useEffect(function(){ setConstLang(settings.displayConstellation||'latin'); }, [settings.displayConstellation]);
+
+      function addTelescope(){ setTelescopes(function(prev){ return prev.concat([{id:uid(), name:"", diameter:"", focal:""}]); }); }
+      function delTelescope(id){ setTelescopes(function(prev){ return prev.filter(function(t){return t.id!==id;}); }); }
+      function updateTelescope(id, patch){ setTelescopes(function(prev){ return prev.map(function(t){ return t.id===id ? {...t, ...patch} : t; }); }); }
+
+      function addEyepiece(){ setEyepieces(function(prev){ return prev.concat([{id:uid(), name:"", focal:"", afov:""}]); }); }
+      function delEyepiece(id){ setEyepieces(function(prev){ return prev.filter(function(e){return e.id!==id;}); }); }
+      function updateEyepiece(id, patch){ setEyepieces(function(prev){ return prev.map(function(e){ return e.id===id ? {...e, ...patch} : e; }); }); }
+
+      function save(){
+        var cleanT = telescopes.map(function(t){ return { id:t.id, name:String(t.name||"").trim(), diameter: t.diameter?Number(t.diameter):null, focal: t.focal?Number(t.focal):null }; }).filter(function(t){ return t.name; });
+        var cleanE = eyepieces.map(function(e){ return { id:e.id, name:String(e.name||"").trim(), focal: e.focal?Number(e.focal):null, afov: e.afov?Number(e.afov):null }; }).filter(function(e){ return e.name && e.focal; });
+        onSave({ telescopes: cleanT, eyepieces: cleanE, displayConstellation: constLang });
+        onClose();
+      }
+
+      return (
+        <Modal open={open} title="Paramètres" onClose={onClose} onSubmit={save} submitLabel="Enregistrer">
+          {/* Affichage */}
+          <section className="space-y-2">
+            <h4 className="font-semibold">Affichage</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm mb-1">Noms des constellations</label>
+                <select value={constLang} onChange={function(e){setConstLang(e.target.value);}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2">
+                  <option value="latin">Latin (par défaut)</option>
+                  <option value="fr">Français</option>
+                </select>
+                <p className="text-xs opacity-70 mt-1">S’applique immédiatement à toutes les nuits et à l’export PDF.</p>
+              </div>
+            </div>
+          </section>
+
+          <div className="h-px bg-gray-800 my-4"></div>
+
+          {/* Télescopes */}
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-semibold">Télescopes</h4>
+              <button onClick={addTelescope} className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-700">+ Ajouter</button>
+            </div>
+            <div className="space-y-2">
+              {telescopes.length===0 ? <div className="text-sm opacity-70">Aucun télescope enregistré.</div> : null}
+              {telescopes.map(function(t){
+                return (
+                  <div key={t.id} className="grid grid-cols-1 md:grid-cols-7 gap-2 p-3 rounded border border-gray-800 bg-gray-900">
+                    <div className="md:col-span-3">
+                      <label className="text-xs opacity-70">Nom</label>
+                      <input value={t.name||""} onChange={function(e){updateTelescope(t.id,{name:e.target.value});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+                    </div>
+                    <div>
+                      <label className="text-xs opacity-70">Diamètre (mm)</label>
+                      <input type="number" min="20" step="1" value={(t.diameter!=null?t.diameter:"")} onChange={function(e){updateTelescope(t.id,{diameter:e.target.value?Number(e.target.value):null});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+                    </div>
+                    <div>
+                      <label className="text-xs opacity-70">Focale (mm)</label>
+                      <input type="number" min="100" step="1" value={(t.focal!=null?t.focal:"")} onChange={function(e){updateTelescope(t.id,{focal:e.target.value?Number(e.target.value):null});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+                    </div>
+                    <div className="md:col-span-2 flex items-end">
+                      <button onClick={function(){delTelescope(t.id);}} className="px-3 py-2 rounded border border-red-600 text-red-400 hover:bg-red-600/10 w-full">Supprimer</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="mt-8">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-semibold">Oculaires</h4>
+              <button onClick={addEyepiece} className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-700">+ Ajouter</button>
+            </div>
+            <div className="space-y-2">
+              {eyepieces.length===0 ? <div className="text-sm opacity-70">Aucun oculaire enregistré.</div> : null}
+              {eyepieces.map(function(ep){
+                return (
+                  <div key={ep.id} className="grid grid-cols-1 md:grid-cols-8 gap-2 p-3 rounded border border-gray-800 bg-gray-900">
+                    <div className="md:col-span-4">
+                      <label className="text-xs opacity-70">Nom</label>
+                      <input value={ep.name||""} onChange={function(e){updateEyepiece(ep.id,{name:e.target.value});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+                    </div>
+                    <div>
+                      <label className="text-xs opacity-70">Focale (mm)</label>
+                      <input type="number" min="1" step="0.5" value={(ep.focal!=null?ep.focal:"")} onChange={function(e){updateEyepiece(ep.id,{focal:e.target.value?Number(e.target.value):null});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+                    </div>
+                    <div>
+                      <label className="text-xs opacity-70">Champ (°)</label>
+                      <input type="number" min="30" step="1" value={(ep.afov!=null?ep.afov:"")} onChange={function(e){updateEyepiece(ep.id,{afov:e.target.value?Number(e.target.value):null});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
+                    </div>
+                    <div className="md:col-span-2 flex items-end">
+                      <button onClick={function(){delEyepiece(ep.id);}} className="px-3 py-2 rounded border border-red-600 text-red-400 hover:bg-red-600/10 w-full">Supprimer</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </Modal>
+      );
+    }
+
+    // ---------- Thumbnail ----------
+    function Thumbnail({ obj, thumbs, remember }){
+      var key = normalizeName(obj && obj.nom ? obj.nom : "");
+      var url = (thumbs && key && thumbs[key]) ? thumbs[key] : null;
+      var [src,setSrc] = useState(url);
+      useEffect(function(){
+        var active=true;
+        async function run(){
+          if(src || !obj || !obj.nom) return;
+          var candidate = await findThumbnailForObject(obj);
+          if(active && candidate){
+            setSrc(candidate);
+            if(remember) remember(key, candidate);
+          }
+        }
+        run(); return function(){ active=false; };
+      }, [obj && obj.nom]);
+      if(!src) return null;
+      return <img src={src} alt={obj.nom} className="h-16 w-16 rounded-md object-cover flex-shrink-0 border border-gray-800" onError={function(e){ e.currentTarget.style.display='none'; }}/>;
+    }
+
+    // ---------------- App ----------------
+    function App(){
+      var [nights,setNights]=useState(function(){ try{return JSON.parse(localStorage.getItem('ccop:nights')||'[]');}catch(e){return[];} });
+      var [selectedId,setSelectedId]=useState((nights[0]&&nights[0].id)?nights[0].id:null);
+
+      var [settings,setSettings]=useState(function(){
+        try{
+          var s = JSON.parse(localStorage.getItem('ccop:settings')||'{"telescopes":[],"eyepieces":[]}');
+          if(!s.telescopes) s.telescopes=[];
+          if(!s.eyepieces) s.eyepieces=[];
+          if(!s.displayConstellation) s.displayConstellation='latin';
+          return s;
+        }catch(e){ return { telescopes:[], eyepieces:[], displayConstellation:'latin' }; }
+      });
+      useEffect(function(){ localStorage.setItem('ccop:settings', JSON.stringify(settings)); },[settings]);
+
+      var [thumbs,setThumbs]=useState(function(){ try{return JSON.parse(localStorage.getItem('ccop:thumbs')||'{}');}catch(e){return{};} });
+      function rememberThumb(key,url){ setThumbs(function(prev){ var next={}; for(var k in prev){ next[k]=prev[k]; } next[key]=url; try{ localStorage.setItem('ccop:thumbs', JSON.stringify(next)); }catch(e){} return next; }); }
+
+      var [flash,setFlash]=useState(null);
+      function showFlash(type,text){ setFlash({type:type,text:text}); setTimeout(function(){ setFlash(null); },3000); }
+
+      useEffect(function(){ localStorage.setItem('ccop:nights', JSON.stringify(nights)); },[nights]);
+
+      var [nightModalOpen,setNightModalOpen]=useState(false);
+      var [nightDraft,setNightDraft]=useState(initialNight());
+
+      var [objectModalOpen,setObjectModalOpen]=useState(false);
+      var [objectDraft,setObjectDraft]=useState({});
+      var [objectErrors,setObjectErrors]=useState({});
+
+      var [settingsOpen,setSettingsOpen]=useState(false);
+
+      var selectedNight=useMemo(function(){ return (nights||[]).find(function(n){return n.id===selectedId;})||null; }, [nights,selectedId]);
+      var [collapsed,setCollapsed]=useState({}); useEffect(function(){ setCollapsed({}); },[selectedId]);
+
+      function groupedObjects(){
+        var objs=(selectedNight&&selectedNight.objects)?selectedNight.objects.slice():[];
+        var groups={};
+        var lang = settings.displayConstellation||'latin';
+        objs.forEach(function(o){
+          var disp = displayConstellation(o.constellation||"", lang);
+          var key = (String(disp).trim() || "Constellation inconnue");
+          if(!groups[key]) groups[key]=[];
+          groups[key].push(o);
+        });
+        var keys=Object.keys(groups).sort(function(a,b){ return a.localeCompare(b,'fr'); });
+        keys.forEach(function(k){ groups[k].sort(function(a,b){ return (a.nom||"").localeCompare((b.nom||""),'fr'); }); });
+        return {keys:keys, groups:groups};
+      }
+
+      var nightScope = useMemo(function(){ if(!selectedNight) return null; return buildScope(selectedNight.diameter, selectedNight.focal); }, [selectedNight && selectedNight.diameter, selectedNight && selectedNight.focal, selectedNight && selectedNight.id]);
+
+      async function geocodeIfNeeded(n){
+        if((n.lat!=null && n.lon!=null) || !n.location) return n;
+        try{
+          var url="https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(n.location)+"&count=1&language=fr&format=json";
+          var r=await fetch(url);
+          if(r.ok){ var j=await r.json(); var res=(j&&j.results&&j.results[0])?j.results[0]:null; if(res){ return {...n, lat:res.latitude, lon:res.longitude}; } }
+        }catch(e){}
+        return n;
+      }
+
+      // CRUD nuits
+      function openCreateNight(){ setNightDraft(initialNight()); setNightModalOpen(true); }
+      function openEditNight(n){ setNightDraft({...n}); setNightModalOpen(true); }
+      async function saveNight(){
+        var draft = await geocodeIfNeeded(nightDraft);
+        setNights(function(prev){
+          var exists=prev.some(function(n){ return n.id===draft.id; });
+          if(exists) return prev.map(function(n){ return n.id===draft.id?{...draft}:n; });
+          var added=prev.concat([{...draft}]); if(!selectedId) setSelectedId(draft.id); return added;
+        });
+        setNightModalOpen(false);
+      }
+      function removeNight(id){ setNights(function(prev){ return prev.filter(function(n){ return n.id!==id; }); }); if(selectedId===id) setSelectedId(null); }
+
+      // CRUD objets
+      function openCreateObject(){ setObjectDraft({ id:uid(), nom:"", constellation:"", type:"", raHours:null, decDeg:null, pageAtlas:"", epIds:[], filters:{uhc:false, oiii:false, hbeta:false}, note:"", commonName:"", distanceLy:null, distanceApprox:false }); setObjectErrors({}); setObjectModalOpen(true); }
+      function openEditObject(obj){ setObjectDraft({ ...obj, epIds: Array.isArray(obj.epIds)?obj.epIds.slice():[], filters:{ uhc:!!(obj.filters&&obj.filters.uhc), oiii:!!(obj.filters&&obj.filters.oiii), hbeta:!!(obj.filters&&obj.filters.hbeta) } }); setObjectErrors({}); setObjectModalOpen(true); }
+      function validateObject(d){ var errs={}; if(!String(d.nom||"").trim()) errs.nom="Le nom de l'objet est obligatoire."; if(!String(d.constellation||"").trim()) errs.constellation="La constellation est obligatoire."; return errs; }
+      function isDuplicateName(night,d){ var target=normalizeName(d.nom); return (night.objects||[]).some(function(o){ if(o.id===d.id) return false; return normalizeName(o.nom)===target; }); }
+
+      async function saveObject(){
+        if(!selectedNight) return;
+        var normalizedConst = ensureConstLAT(objectDraft.constellation);
+        var workingDraft = { ...objectDraft, constellation: normalizedConst };
+
+        var errs=validateObject(workingDraft);
+        if(Object.keys(errs).length){ setObjectErrors(errs); showFlash('error','Veuillez corriger les champs obligatoires.'); return; }
+        if(isDuplicateName(selectedNight,workingDraft)){ showFlash('error','Cet objet est déjà présent dans cette nuit.'); return; }
+
+        var objToSave={...workingDraft};
+        if(objToSave.raHours==null || objToSave.decDeg==null || !objToSave.type || !objToSave.constellation || !objToSave.commonName || objToSave.distanceLy==null){
+          try{
+            var extra=await enrichObjectDetails(objToSave.nom);
+            if(objToSave.raHours==null) objToSave.raHours=extra.raHours;
+            if(objToSave.decDeg==null) objToSave.decDeg=extra.decDeg;
+            if(!objToSave.type && extra.type) objToSave.type=extra.type;
+            if(!objToSave.constellation && extra.constellation) objToSave.constellation=ensureConstLAT(extra.constellation);
+            if(!objToSave.commonName && extra.commonName) objToSave.commonName=extra.commonName;
+            if(objToSave.distanceLy==null && extra.distanceLy!=null){ objToSave.distanceLy=extra.distanceLy; objToSave.distanceApprox = extra.distanceApprox===true; }
+          }catch(e){}
+        }
+        objToSave.constellation = ensureConstLAT(objToSave.constellation);
+
+        setNights(function(prev){
+          return prev.map(function(n){
+            if(n.id!==selectedNight.id) return n;
+            var has=(n.objects||[]).some(function(o){ return o.id===objToSave.id; });
+            return { ...n, objects: has ? n.objects.map(function(o){ return o.id===objToSave.id?{...objToSave}:o; }) : (n.objects||[]).concat([{...objToSave}]) };
+          });
+        });
+        setObjectModalOpen(false);
+        showFlash('success','Objet enregistré.');
+      }
+      function removeObject(objId){
+        if(!selectedNight) return;
+        setNights(function(prev){
+          return prev.map(function(n){
+            if(n.id!==selectedNight.id) return n;
+            return { ...n, objects:(n.objects||[]).filter(function(o){ return o.id!==objId; }) };
+          });
+        });
+      }
+
+      // Export PDF
+      function exportPDF(){
+        if(!selectedNight) return;
+        var grouped = (function(){
+          var objs=(selectedNight&&selectedNight.objects)?selectedNight.objects.slice():[];
+          var gs={}; var lang=settings.displayConstellation||'latin';
+          objs.forEach(function(o){
+            var k = displayConstellation(o.constellation||"", lang) || "Constellation inconnue";
+            if(!gs[k]) gs[k]=[]; gs[k].push(o);
+          });
+          var ks=Object.keys(gs).sort(function(a,b){ return a.localeCompare(b,'fr'); });
+          ks.forEach(function(k){ gs[k].sort(function(a,b){ return (a.nom||"").localeCompare((b.nom||""),'fr'); }); });
+          return {keys:ks, groups:gs};
+        })();
+        var keys = grouped.keys; var groups = grouped.groups; var info=selectedNight; var scope = buildScope(info.diameter, info.focal);
+
+        var EP_MAP={}; settings.eyepieces.forEach(function(ep){ EP_MAP[ep.id]=ep; });
+
+        var parts=[];
+        parts.push('<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CCOP — Export PDF</title>');
+        parts.push('<style>:root{--bg:#ffffff;--fg:#111111;--muted:#444;--line:#e5e7eb}html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Inter,Helvetica Neue,Arial,Ubuntu;-webkit-print-color-adjust:exact;print-color-adjust:exact}.page{max-width:900px;margin:0 auto;padding:28px 22px}h1{font-size:28px;margin:0 0 8px 0}.meta{color:var(--muted);font-size:14px;margin-bottom:22px}h2.group{font-size:22px;margin:22px 0 10px 0;border-bottom:1px solid var(--line);padding-bottom:6px}.obj{padding:10px 0;border-bottom:1px dotted var(--line)}.obj:last-child{border-bottom:0}.objname{font-weight:700;font-size:16px;margin-bottom:2px}.row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted)}@page{size:A4;margin:14mm}</style></head><body><div class="page">');
+
+        parts.push('<h1>Crazy Cloud — Liste d\'observation</h1>');
+        var meta=[]; if(info.location) meta.push(info.location); if(info.date) meta.push(info.date); if(info.time) meta.push(info.time); if(info.bortle!=null) meta.push("Bortle "+info.bortle); if(info.telescope) meta.push(info.telescope); if(scope) meta.push(Math.round(scope.aperture_mm)+"/"+Math.round(scope.focal_mm)+" mm (f/"+(scope.f_ratio).toFixed(1)+")");
+        parts.push('<div class="meta">'+meta.join(' • ')+'</div>');
+
+        keys.forEach(function(k){
+          parts.push('<h2 class="group">'+k.replace(/</g,"&lt;")+'</h2>');
+          (groups[k]||[]).forEach(function(o){
+            var lineName=(o.nom||"").replace(/</g,"&lt;"); if(o.type) lineName += ' — '+String(o.type).replace(/</g,"&lt;"); if(o.commonName) lineName += ' — '+String(o.commonName).replace(/</g,"&lt;");
+            parts.push('<div class="obj">');
+            parts.push('<div class="objname">'+lineName+'</div>');
+            var cols=[];
+            if(o.raHours!=null) cols.push('<div><strong>AD:</strong> '+hmsFromHours(o.raHours)+' ('+Number(o.raHours).toFixed(2)+'h)</div>');
+            if(o.decDeg!=null) cols.push('<div><strong>Déc:</strong> '+Number(o.decDeg).toFixed(2)+'°</div>');
+            if(o.distanceLy!=null) cols.push('<div><strong>Distance:</strong> '+(o.distanceApprox?'≈ ':'')+nf(o.distanceLy)+' a.l.</div>');
+            if(o.pageAtlas) cols.push('<div><strong>Sky Atlas:</strong> '+String(o.pageAtlas).replace(/</g,"&lt;")+'</div>');
+
+            var recF = recommendedFiltersForType(o.type||"");
+            var bestF = bestFilterForObject(o);
+            var filt = [];
+            if(bestF==="uhc") filt.push("UHC (meilleur)"); else if(recF.uhc) filt.push("UHC (conseillé)");
+            if(bestF==="oiii") filt.push("OIII (meilleur)"); else if(recF.oiii) filt.push("OIII (conseillé)");
+            if(bestF==="hbeta") filt.push("Hβ (meilleur)"); else if(recF.hbeta) filt.push("Hβ (conseillé)");
+            if(filt.length) cols.push('<div><strong>Filtres:</strong> '+filt.join(', ')+'</div>');
+
+            // Oculaires (avec/ sans filtre)
+            var eps = Array.isArray(o.epIds)?o.epIds:[];
+            if(eps.length){
+              var recWith = recommendEyepieceId(scope, o.type||"", o.filters||{}, settings.eyepieces||[]);
+              var recNo   = recommendEyepieceId(scope, o.type||"", {}, settings.eyepieces||[]);
+              var epTxt = eps.map(function(id){
+                var ep=EP_MAP[id]; if(!ep) return null;
+                var mag = scope ? Math.round(scope.focal_mm / ep.focal) : null;
+                var base = ep.name+(ep.focal?(" "+ep.focal+"mm"):"")+(mag?(" ("+mag+"×)"):"");
+                var suffix="";
+                if(recWith && recNo && recWith===recNo && id===recWith) suffix=" (conseillé avec ou sans filtre)";
+                else if(recWith && id===recWith) suffix=" (conseillé avec filtre)";
+                else if(recNo && id===recNo) suffix=" (conseillé)";
+                return base+suffix;
+              }).filter(Boolean).join(', ');
+              if(epTxt) cols.push('<div><strong>Oculaires:</strong> '+epTxt.replace(/</g,"&lt;")+'</div>');
+            }
+
+            parts.push('<div class="row">'+cols.join(' ')+'</div>');
+            if(o.note){ parts.push('<div class="row" style="margin-top:6px"><div><strong>Note:</strong> '+String(o.note).replace(/</g,"&lt;")+'</div></div>'); }
+            parts.push('</div>');
+          });
+        });
+
+        parts.push('</div><script>window.focus();setTimeout(function(){try{window.print();}catch(e){}},250);<\/script></body></html>');
+        var w=window.open("", "_blank"); if(!w){ alert("Popup bloquée : autorisez les popups et réessayez."); return; }
+        w.document.open(); w.document.write(parts.join('')); w.document.close();
+      }
+
+      // UI helpers
+      function toggleGroup(key){ setCollapsed(function(c){ var n={}; for(var k in c){ n[k]=c[k]; } n[key]=!c[key]; return n; }); }
+
+      var grouped = groupedObjects(); var groupKeys = grouped.keys; var groups = grouped.groups;
+
+      var upcoming = (nights||[]).filter(function(n){ return !isPastNight(n); }).sort(function(a,b){ var da=parseNightDateTime(a), db=parseNightDateTime(b); return (da?da.getTime():Infinity) - (db?db.getTime():Infinity); });
+      var past = (nights||[]).filter(function(n){ return isPastNight(n); }).sort(function(a,b){ var da=parseNightDateTime(a), db=parseNightDateTime(b); return (db?db.getTime():0) - (da?da.getTime():0); });
+
+      return (
+        <div className="flex h-screen">
+          <Flash flash={flash} onClose={function(){setFlash(null);}} />
+
+          {/* Sidebar */}
+          <aside className="w-80 shrink-0 border-r border-gray-800 bg-gray-900/80 backdrop-blur">
+            <div className="p-4 flex items-center justify-between gap-3 border-b border-gray-800">
+              <div className="flex items-center gap-3">
+                <img src="logo.png" alt="Logo" className="h-10 w-10 rounded-lg object-cover bg-gray-800" onError={function(e){e.target.style.display='none';}}/>
+                <div><div className="font-semibold leading-tight">Crazy Cloud</div><div className="text-sm opacity-70">Observation Planner</div></div>
+              </div>
+              <button title="Paramètres" onClick={function(){setSettingsOpen(true);}} className="p-2 rounded-md border border-gray-700 hover:bg-gray-800">⚙️</button>
+            </div>
+
+            <div className="p-4 flex items-center justify-between">
+              <button onClick={openCreateNight} className="px-3 py-2 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700">+ Ajouter une nuit</button>
+            </div>
+
+            <div className="px-4 pb-4 overflow-y-auto h-[calc(100vh-140px)] space-y-6">
+              <div>
+                <div className="text-xs uppercase tracking-wide opacity-70 mb-2">À venir</div>
+                {upcoming.length===0 ? <div className="text-sm opacity-60">Aucune nuit planifiée.</div> :
+                  <div className="space-y-2">
+                    {upcoming.map(function(n){
+                      return (
+                        <div key={n.id} className={"rounded-lg border "+(selectedId===n.id?"border-blue-500":"border-gray-800")+" bg-gray-900 shadow-sm"}>
+                          <button className="w-full text-left px-3 py-2" onClick={function(){setSelectedId(n.id);}}>
+                            <div className="font-medium">{n.location||"Lieu inconnu"}</div>
+                            <div className="text-sm opacity-70">{(n.date||"Date ?")} • {(n.time||"Heure ?")} • Bortle {(n.bortle!=null?n.bortle:"?")}</div>
+                          </button>
+                          <div className="flex gap-2 px-3 pb-3">
+                            <button onClick={function(){openEditNight(n);}} className="text-blue-400 hover:underline text-sm">Modifier</button>
+                            <button onClick={function(){removeNight(n.id);}} className="text-red-400 hover:underline text-sm">Supprimer</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>}
+              </div>
+
+              <div>
+                <div className="text-xs uppercase tracking-wide opacity-70 mb-2">Passées</div>
+                {past.length===0 ? <div className="text-sm opacity-60">Aucune nuit passée.</div> :
+                  <div className="space-y-2">
+                    {past.map(function(n){
+                      return (
+                        <div key={n.id} className="rounded-lg border border-gray-800 bg-gray-900 shadow-sm opacity-60">
+                          <button className="w-full text-left px-3 py-2" onClick={function(){setSelectedId(n.id);}}>
+                            <div className="font-medium">{n.location||"Lieu inconnu"}</div>
+                            <div className="text-sm">{(n.date||"Date ?")} • {(n.time||"Heure ?")} • Bortle {(n.bortle!=null?n.bortle:"?")}</div>
+                          </button>
+                          <div className="flex gap-2 px-3 pb-3">
+                            <button onClick={function(){openEditNight(n);}} className="text-blue-400 hover:underline text-sm">Modifier</button>
+                            <button onClick={function(){removeNight(n.id);}} className="text-red-400 hover:underline text-sm">Supprimer</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>}
+              </div>
+            </div>
+          </aside>
+
+          {/* Main */}
+          <main className="flex-1 overflow-y-auto">
+            <div className="max-w-6xl mx-auto p-6">
+              {!selectedNight ? (
+                <div className="text-center opacity-70">Sélectionnez une nuit dans la colonne de gauche.</div>
+              ) : (
+                <div>
+                  {/* En-tête */}
+                  <div className="rounded-xl border border-gray-800 bg-gray-900 p-5 mb-6">
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <h1 className="text-2xl md:text-3xl font-semibold">
+                        {selectedNight.location||("Nuit du "+(selectedNight.date||"—"))}
+                      </h1>
+                      <div className="text-sm opacity-70">Bortle {(selectedNight.bortle!=null?selectedNight.bortle:"—")}</div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                      <div><div className="text-xs uppercase opacity-70">Date</div><div className="text-lg">{selectedNight.date||"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Heure</div><div className="text-lg">{selectedNight.time||"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Télescope</div><div className="text-lg">{selectedNight.telescope||"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Diamètre / Focale</div><div className="text-lg">{(selectedNight.diameter&&selectedNight.focal)?(Math.round(selectedNight.diameter)+"/"+Math.round(selectedNight.focal)+" mm"):"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Rapport f/D</div><div className="text-lg">{(nightScope)?("f/"+nightScope.f_ratio.toFixed(1)):"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Coord. site</div><div className="text-lg">{(selectedNight.lat!=null&&selectedNight.lon!=null)? (fmt(selectedNight.lat,3)+"°, "+fmt(selectedNight.lon,3)+"°") : "—"}</div></div>
+                      <div className="lg:col-span-2"><div className="text-xs uppercase opacity-70">Météo</div><div className="text-lg">{selectedNight.meteo||"—"}</div></div>
+                    </div>
+                  </div>
+
+                  <section>
+                    <div className="flex items-center justify-between mb-3">
+                      <h2 className="font-medium">Objets à observer</h2>
+                      <div className="flex gap-2">
+                        <button onClick={exportPDF} className="px-3 py-2 text-sm rounded-md border border-gray-700 hover:bg-gray-800">Exporter en PDF</button>
+                        <button onClick={openCreateObject} className="px-3 py-2 text-sm rounded-md bg-green-600 text-white hover:bg-green-700">+ Ajouter un objet</button>
+                      </div>
+                    </div>
+
+                    {groupKeys.length===0 ? (
+                      <div className="text-sm opacity-70">Aucun objet pour cette nuit.</div>
+                    ) : (
+                      <div className="space-y-6">
+                        {groupKeys.map(function(key){
+                          var isCollapsed=!!collapsed[key];
+                          return (
+                            <div key={key} className="w-full">
+                              <button onClick={function(){toggleGroup(key);}} className="w-full flex items-center justify-between py-2">
+                                <div className="text-2xl font-bold">{key}</div>
+                                <svg className={"h-5 w-5 transition-transform "+(isCollapsed?"-rotate-90":"")} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.25a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd"/></svg>
+                              </button>
+
+                              {!isCollapsed && (
+                                <div className="mt-2 space-y-3">
+                                  {groups[key].map(function(obj){
+                                    var epSelected = Array.isArray(obj.epIds)? obj.epIds.map(function(id){ return settings.eyepieces.find(function(e){return e.id===id;}); }).filter(Boolean) : [];
+
+                                    var recWith = recommendEyepieceId(nightScope, obj.type||"", obj.filters||{}, settings.eyepieces||[]);
+                                    var recNo   = recommendEyepieceId(nightScope, obj.type||"", {}, settings.eyepieces||[]);
+
+                                    var recF = recommendedFiltersForType(obj.type||"");
+                                    var bestF = bestFilterForObject(obj);
+                                    var filtTags=[];
+                                    if(bestF==="uhc") filtTags.push("UHC (meilleur)"); else if(recF.uhc) filtTags.push("UHC (conseillé)");
+                                    if(bestF==="oiii") filtTags.push("OIII (meilleur)"); else if(recF.oiii) filtTags.push("OIII (conseillé)");
+                                    if(bestF==="hbeta") filtTags.push("Hβ (meilleur)"); else if(recF.hbeta) filtTags.push("Hβ (conseillé)");
+
+                                    return (
+                                      <div key={obj.id} className="w-full rounded-lg border border-gray-800 bg-gray-900 p-4">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <div className="flex items-start gap-3">
+                                            <Thumbnail obj={obj} thumbs={thumbs} remember={rememberThumb}/>
+                                            <div>
+                                              <div className="font-medium text-lg">{obj.nom||"Objet sans nom"}</div>
+                                              <div className="flex items-center gap-2 flex-wrap text-base">
+                                                {obj.type ? <span>{obj.type}</span> : null}
+                                                {(obj.type && obj.constellation) ? <span className="opacity-60">•</span> : null}
+                                                {obj.constellation ? <span>{displayConstellation(obj.constellation, settings.displayConstellation||'latin')}</span> : null}
+                                              </div>
+                                              {obj.commonName ? <div className="text-sm italic opacity-80 mt-0.5">{obj.commonName}</div> : null}
+                                            </div>
+                                          </div>
+                                          <div className="flex gap-2">
+                                            <button onClick={function(){openEditObject(obj);}} className="text-blue-400 hover:underline text-sm">Modifier</button>
+                                            <button onClick={function(){removeObject(obj.id);}} className="text-red-400 hover:underline text-sm">Supprimer</button>
+                                          </div>
+                                        </div>
+
+                                        <div className="text-sm mt-4 grid grid-cols-2 md:grid-cols-3 gap-4">
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">AD (h)</div>
+                                            <div className="mt-1">{obj.raHours!=null ? (hmsFromHours(obj.raHours)+" ("+fmt(obj.raHours,2)+"h)") : "—"}</div>
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Déc (°)</div>
+                                            <div className="mt-1">{obj.decDeg!=null ? (fmt(obj.decDeg,2)+"°") : "—"}</div>
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Distance</div>
+                                            <div className="mt-1">{lyStr(obj.distanceLy, obj.distanceApprox===true)}</div>
+                                          </div>
+                                        </div>
+
+                                        <div className="text-sm mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Sky Atlas</div>
+                                            <div className="mt-1">{obj.pageAtlas || "—"}</div>
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Oculaires</div>
+                                            <div className="mt-1 flex flex-wrap gap-2">
+                                              {epSelected.length ? epSelected.map(function(ep){
+                                                var mag = nightScope ? Math.round(nightScope.focal_mm / (ep.focal||1)) : null;
+                                                var pill = ep.name+(ep.focal?(" "+ep.focal+"mm"):"")+(mag?(" ("+mag+"×)"):"");
+
+                                                var suffix="";
+                                                if(recWith && recNo && recWith===recNo && ep.id===recWith) suffix=" (conseillé avec ou sans filtre)";
+                                                else if(recWith && ep.id===recWith) suffix=" (conseillé avec filtre)";
+                                                else if(recNo && ep.id===recNo) suffix=" (conseillé)";
+
+                                                return <Tag key={ep.id}>{pill}{suffix}</Tag>;
+                                              }) : <span>—</span>}
+                                            </div>
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Filtres (recommandés)</div>
+                                            <div className="mt-1 flex flex-wrap gap-2">
+                                              {filtTags.length ? filtTags.map(function(f,i){ return <Tag key={i}>{f}</Tag>; }) : <span>—</span>}
+                                            </div>
+                                          </div>
+                                          {obj.note ? (
+                                            <div className="flex flex-col md:col-span-3">
+                                              <div className="opacity-70 text-xs uppercase tracking-wide">Note</div>
+                                              <div className="mt-1 whitespace-pre-wrap">{obj.note}</div>
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                </div>
+              )}
+            </div>
+          </main>
+
+          {/* Modales */}
+          <Modal open={nightModalOpen} title={(nights.some(function(n){ return n.id===(nightDraft&&nightDraft.id); }))?"Modifier la nuit":"Nouvelle nuit"} onClose={function(){setNightModalOpen(false);}} onSubmit={saveNight} submitLabel="Enregistrer">
+            <NightForm draft={nightDraft} setDraft={setNightDraft} telescopes={settings.telescopes} />
+          </Modal>
+
+          <Modal open={objectModalOpen} title={(((selectedNight&&selectedNight.objects)?selectedNight.objects:[]).some(function(o){ return o.id===(objectDraft&&objectDraft.id); }))?"Modifier l'objet":"Nouvel objet"} onClose={function(){setObjectModalOpen(false);}} onSubmit={saveObject} submitLabel="Enregistrer">
+            <ObjectForm draft={objectDraft} setDraft={setObjectDraft} errors={objectErrors} nightScope={ (selectedNight?buildScope(selectedNight.diameter, selectedNight.focal):null) } eyepieces={settings.eyepieces} openSettings={function(){ setObjectModalOpen(false); setSettingsOpen(true); }} />
+          </Modal>
+
+          <SettingsModal open={settingsOpen} onClose={function(){setSettingsOpen(false);}} settings={settings} onSave={function(newSettings){ setSettings(newSettings); }} />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
