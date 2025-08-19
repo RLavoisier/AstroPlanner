@@ -4,1073 +4,1249 @@
   <meta charset="UTF-8" />
   <title>Crazy Cloud Observation Planner</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Tailwind (CDN) -->
+  <!-- Tailwind (dev) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- React 18 (dev) -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <!-- Babel (JSX) -->
+  <!-- Babel (JSX only) -->
   <script crossorigin src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
   <style>
-    :root { color-scheme: dark; }
-    body{background:#0b0f19;color:#e5e7eb}
+    html,body{background:#0b0f14;color:#e5e7eb}
     body.modal-open{overflow:hidden}
+    ::selection{background:#2563eb33}
   </style>
 </head>
-<body>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
   <div id="root"></div>
 
-  <!-- Overlay erreurs (utile si quelque chose casse) -->
-  <script>
-  (function(){
-    function showErr(msg){
-      var box=document.getElementById('err-overlay');
-      if(!box){
-        box=document.createElement('div'); box.id='err-overlay';
-        box.style.cssText='position:fixed;left:8px;right:8px;bottom:8px;max-height:45vh;overflow:auto;background:#111827;color:#fca5a5;border:1px solid #7f1d1d;padding:10px 12px;border-radius:8px;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;z-index:999999';
-        document.body.appendChild(box);
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useMemo } = React;
+
+    /* ==============================
+       Utils
+    ============================== */
+    function uid(){ return Math.floor(Math.random()*1e9).toString(36)+Date.now().toString(36); }
+    function fmt(num, digits){ if(num==null || isNaN(num)) return "—"; return Number(num).toFixed(digits); }
+    function hmsFromHours(h){
+      if(h==null || isNaN(h)) return "—";
+      var hh = Math.floor(h);
+      var mm = Math.floor((h - hh)*60);
+      var ss = Math.round(((h - hh)*60 - mm)*60);
+      if(ss===60){ ss=0; mm+=1; }
+      if(mm===60){ mm=0; hh+=1; }
+      return (String(hh).padStart(2,'0')+":"+String(mm).padStart(2,'0')+":"+String(ss).padStart(2,'0'));
+    }
+    function parseNightDateTime(n){
+      if(!n||!n.date) return null;
+      var parts=(n.date||"").split("-");
+      if(parts.length<3) return null;
+      var y=parseInt(parts[0],10), m=parseInt(parts[1],10), d=parseInt(parts[2],10);
+      if(!y||!m||!d) return null;
+      var hh=0, mi=0;
+      if(n.time && /^\d{2}:\d{2}/.test(n.time)){
+        var p=n.time.split(":"); hh=parseInt(p[0],10)||0; mi=parseInt(p[1],10)||0;
       }
-      var p=document.createElement('div'); p.style.marginTop='6px'; p.textContent=msg;
-      box.appendChild(p);
+      return new Date(y, m-1, d, hh, mi, 0, 0);
     }
-    window.addEventListener('error', function(e){ showErr('[error] '+(e.message||e.error)); });
-    window.addEventListener('unhandledrejection', function(e){ showErr('[promise] '+(e.reason && (e.reason.message||e.reason) || 'Rejection')); });
-  })();
-  </script>
+    function isPastNight(n){ var dt=parseNightDateTime(n); if(!dt) return false; return dt.getTime() < Date.now(); }
+    function normalizeName(s){ return String(s||"").toUpperCase().replace(/\s+/g,"").trim(); }
+    function digits(s){ return String(s==null?"":s).replace(/[^0-9]/g,""); }
+    function toBase64Utf8(str){ return btoa(unescape(encodeURIComponent(str))); }
+    function fromBase64Utf8(b64){ return decodeURIComponent(escape(atob(b64))); }
 
-  <script type="text/babel" data-presets="es2015,react">
-  const {useState,useEffect,useMemo} = React;
-
-  /* ---------- Utils ---------- */
-  function uid(){ return Math.floor(Math.random()*1e9).toString(36)+Date.now().toString(36); }
-  function shallowCopy(obj){ var o={}; for(var k in obj){ if(Object.prototype.hasOwnProperty.call(obj,k)) o[k]=obj[k]; } return o; }
-  function assign(obj,patch){ var o=shallowCopy(obj||{}); for(var k in patch){ o[k]=patch[k]; } return o; }
-  function normalizeName(s){ return String(s||"").toUpperCase().replace(/\s+/g,"").trim(); }
-  function fmt(num, digits){ if(num==null||isNaN(num))return "—"; return Number(num).toFixed(digits); }
-  function hmsFromHours(h){
-    if(h==null||isNaN(h)) return "—";
-    var hh=Math.floor(h), mm=Math.floor((h-hh)*60), ss=Math.round(((h-hh)*60-mm)*60);
-    function z(n){ return (n<10?"0":"")+n; }
-    return z(hh)+":"+z(mm)+":"+z(ss);
-  }
-  function looksLikeCatalogCode(s){ if(!s) return false; return /^(M\s*\d+|NGC\s*-?\s*\d+|IC\s*-?\s*\d+)/i.test(String(s).trim()); }
-  function messierNumber(str){ var m=String(str||"").toUpperCase().match(/^M\s*([-+]?\d+)/); return m?parseInt(m[1],10):null; }
-  function ngcNumber(str){ var m=String(str||"").toUpperCase().match(/^NGC\s*-?\s*(\d+)/); return m?parseInt(m[1],10):null; }
-  function icNumber(str){  var m=String(str||"").toUpperCase().match(/^IC\s*-?\s*(\d+)/);  return m?parseInt(m[1],10):null; }
-
-  /* ---------- Constellations ---------- */
-  var IAU_LAT = {And:"Andromeda",Ant:"Antlia",Aps:"Apus",Aql:"Aquila",Aqr:"Aquarius",Ara:"Ara",Ari:"Aries",Aur:"Auriga",Boo:"Boötes",Cae:"Caelum",Cam:"Camelopardalis",Cap:"Capricornus",Car:"Carina",Cas:"Cassiopeia",Cen:"Centaurus",Cep:"Cepheus",Cet:"Cetus",Cha:"Chamaeleon",Cir:"Circinus",CMa:"Canis Major",CMi:"Canis Minor",Cnc:"Cancer",Col:"Columba",Com:"Coma Berenices",CrA:"Corona Australis",CrB:"Corona Borealis",Crt:"Crater",Cru:"Crux",Crv:"Corvus",CVn:"Canes Venatici",Cyg:"Cygnus",Del:"Delphinus",Dor:"Dorado",Dra:"Draco",Equ:"Equuleus",Eri:"Eridanus",For:"Fornax",Gem:"Gemini",Gru:"Grus",Her:"Hercules",Hor:"Horologium",Hya:"Hydra",Hyi:"Hydrus",Ind:"Indus",Lac:"Lacerta",Leo:"Leo",Lep:"Lepus",Lib:"Libra",Lup:"Lupus",Lyn:"Lynx",Lyr:"Lyra",Men:"Mensa",Mic:"Microscopium",Mon:"Monoceros",Mus:"Musca",Nor:"Norma",Oct:"Octans",Oph:"Ophiuchus",Ori:"Orion",Pav:"Pavo",Peg:"Pegasus",Per:"Perseus",Phe:"Phoenix",Pic:"Pictor",PsA:"Piscis Austrinus",Psc:"Pisces",Pup:"Puppis",Pyx:"Pyxis",Ret:"Reticulum",Scl:"Sculptor",Sco:"Scorpius",Sct:"Scutum",Ser:"Serpens",Sex:"Sextans",Sge:"Sagitta",Sgr:"Sagittarius",Tau:"Taurus",Tel:"Telescopium",Tri:"Triangulum",TrA:"Triangulum Australe",Tuc:"Tucana",UMa:"Ursa Major",UMi:"Ursa Minor",Vel:"Vela",Vir:"Virgo",Vol:"Volans",Vul:"Vulpecula"};
-  var IAU_FR  = {And:"Andromède",Ant:"Machine pneumatique",Aps:"Oiseau de paradis",Aql:"Aigle",Aqr:"Verseau",Ara:"Autel",Ari:"Bélier",Aur:"Cocher",Boo:"Bouvier",Cae:"Burin",Cam:"Girafe",Cap:"Capricorne",Car:"Carène",Cas:"Cassiopée",Cen:"Centaure",Cep:"Céphée",Cet:"Baleine",Cha:"Caméléon",Cir:"Compas",CMa:"Grand Chien",CMi:"Petit Chien",Cnc:"Cancer",Col:"Colombe",Com:"Chevelure de Bérénice",CrA:"Couronne australe",CrB:"Couronne boréale",Crt:"Coupe",Cru:"Croix du Sud",Crv:"Corbeau",CVn:"Chiens de chasse",Cyg:"Cygne",Del:"Dauphin",Dor:"Dorade",Dra:"Dragon",Equ:"Petit Cheval",Eri:"Éridan",For:"Fourneau",Gem:"Gémeaux",Gru:"Grue",Her:"Hercule",Hor:"Horloge",Hya:"Hydre femelle",Hyi:"Hydre mâle",Ind:"Indien",Lac:"Lézard",Leo:"Lion",Lep:"Lièvre",Lib:"Balance",Lup:"Loup",Lyn:"Lynx",Lyr:"Lyre",Men:"Table",Mic:"Microscope",Mon:"Licorne",Mus:"Mouche",Nor:"Règle",Oct:"Octant",Oph:"Serpentaire",Ori:"Orion",Pav:"Paon",Peg:"Pégase",Per:"Persée",Phe:"Phénix",Pic:"Peintre",PsA:"Poisson austral",Psc:"Poissons",Pup:"Poupe",Pyx:"Boussole",Ret:"Réticule",Scl:"Sculpteur",Sco:"Scorpion",Sct:"Écu de Sobieski",Ser:"Serpent",Sex:"Sextant",Sge:"Flèche",Sgr:"Sagittaire",Tau:"Taureau",Tel:"Télescope",Tri:"Triangle",TrA:"Triangle austral",Tuc:"Toucan",UMa:"Grande Ourse",UMi:"Petite Ourse",Vel:"Voiles",Vir:"Vierge",Vol:"Poisson volant",Vul:"Renard"};
-  var VALID_ABBR = new Set(Object.keys(IAU_LAT));
-  var FR_TO_ABBR = (function(){ var o={}; var es=Object.entries(IAU_FR); for(var i=0;i<es.length;i++){ o[es[i][1].toLowerCase()] = es[i][0]; } return o; })();
-  var LAT_TO_ABBR= (function(){ var o={}; var es=Object.entries(IAU_LAT); for(var i=0;i<es.length;i++){ o[es[i][1].toLowerCase()] = es[i][0]; } return o; })();
-
-  function constAbbrFromField(val){
-    if(!val) return "";
-    var s=String(val).trim();
-    var compact=s.replace(/\s+/g,"");
-    if(VALID_ABBR.has(compact)) return compact;
-    var lower=s.toLowerCase();
-    if(FR_TO_ABBR[lower]) return FR_TO_ABBR[lower];
-    if(LAT_TO_ABBR[lower]) return LAT_TO_ABBR[lower];
-    return "";
-  }
-  function displayConstellation(abbr, mode){ if(!abbr) return ""; return mode==="fr" ? (IAU_FR[abbr]||abbr) : (IAU_LAT[abbr]||abbr); }
-
-  /* ---------- Types lisibles ---------- */
-  function prettyType(raw){
-    if(!raw) return "";
-    var t=String(raw).toLowerCase();
-    if(/glob/.test(t) || /\bgc\b/.test(t) || /gcl/.test(t)) return "Amas globulaire";
-    if(/open/.test(t) || /\boc\b/.test(t)) return "Amas ouvert";
-    if(/planetary/.test(t) || /\bpn\b/.test(t)) return "Nébuleuse planétaire";
-    if(/h\s*ii|emission|émission/.test(t)) return "Région H II";
-    if(/reflection|réflexion/.test(t)) return "Nébuleuse par réflexion";
-    if(/dark|obscur|\bdn\b/.test(t)) return "Nébuleuse obscure";
-    if(/snr|remnant|rémanent/.test(t)) return "Rémanent de supernova";
-    if(/galax|gx\b/.test(t)) return "Galaxie";
-    if(/cluster/.test(t)) return "Amas d'étoiles";
-    if(/double/.test(t)) return "Étoile double";
-    if(/star/.test(t)) return "Étoile";
-    if(/aster/.test(t)) return "Astérisme";
-    return raw;
-  }
-
-  /* ---------- RA/Dec parsing ---------- */
-  function parseRAHours(v){
-    if(v==null||v==="") return null;
-    if(typeof v==="number") return v>24 ? v/15 : v;
-    var s=String(v).trim();
-    if(/^\d+(\.\d+)?$/.test(s)){ var n=parseFloat(s); return n>24?n/15:n; }
-    var parts=s.replace(/[hms°'"]/g,' ').trim().split(/\s+/);
-    var hh=parseFloat(parts[0])||0, mm=parseFloat(parts[1])||0, ss=parseFloat(parts[2])||0;
-    return hh+mm/60+ss/3600;
-  }
-  function parseDecDeg(v){
-    if(v==null||v==="") return null;
-    if(typeof v==="number") return v;
-    var s=String(v).trim();
-    if(/^[+\-]?\d+(\.\d+)?$/.test(s)) return parseFloat(s);
-    var sign = s[0]==='-'?-1:1;
-    var p=s.replace(/[hms°'"]/g,' ').replace(/[+\-]/g,' ').trim().split(/\s+/);
-    var dd=parseFloat(p[0])||0, mm=parseFloat(p[1])||0, ss=parseFloat(p[2])||0;
-    return sign*(Math.abs(dd)+mm/60+ss/3600);
-  }
-  function extractCoords(f){
-    var raRaw = pickField(f,["ra","raj2000","ra_j2000","ra_deg","ra2000","right_ascension","ra_hours"]);
-    var decRaw= pickField(f,["dec","dej2000","dec_j2000","dec_deg","dec2000","declination"]);
-    return { raHours: parseRAHours(raRaw), decDeg: parseDecDeg(decRaw) };
-  }
-
-  /* ---------- API helpers ---------- */
-  function pickField(obj, candidates){
-    for(var i=0;i<candidates.length;i++){
-      var k=candidates[i];
-      if(obj[k]!=null && obj[k]!=="") return obj[k];
-      var key=null, keys=Object.keys(obj);
-      for(var j=0;j<keys.length;j++){ if(keys[j].toLowerCase()===String(k).toLowerCase()){ key=keys[j]; break; } }
-      if(key && obj[key]!=null && obj[key]!=="") return obj[key];
-    }
-    return "";
-  }
-  async function fetchDatastro(dataset, params){
-    try{
-      var url = "https://www.datastro.eu/api/records/1.0/search/?dataset="+encodeURIComponent(dataset)+"&"+params;
-      var r = await fetch(url); if(!r.ok) return null;
-      return await r.json();
-    }catch(_){ return null; }
-  }
-  function extractDistanceLyStrict(f){
-    function num(x){ var n=parseFloat(String(x).replace(',','.')); return isNaN(n)?null:n; }
-    var dl = num(pickField(f,["distance_ly","distance","ly","distanceal","distance_a_l"]));
-    if(dl!=null && dl>0) return dl;
-    var dk = num(pickField(f,["kly","distance_kly"])); if(dk!=null && dk>0) return dk*1000;
-    var dm = num(pickField(f,["mly","distance_mly"])); if(dm!=null && dm>0) return dm*1e6;
-    var pc = num(pickField(f,["pc","parsec","distance_pc"])); if(pc!=null && pc>0) return pc*3.26156;
-    var kpc= num(pickField(f,["kpc","distance_kpc"])); if(kpc!=null && kpc>0) return kpc*1000*3.26156;
-    var mpc= num(pickField(f,["mpc","distance_mpc"])); if(mpc!=null && mpc>0) return mpc*1e6*3.26156;
-    return null;
-  }
-
-  function buildLabelFromNGCFields(f){
-    var m = pickField(f,["m"]);
-    var ngc = pickField(f,["ngc"]);
-    var ic  = pickField(f,["ic"]);
-    var nom = m ? ("M"+m) : (ngc?("NGC "+ngc):(ic?("IC "+ic):(pickField(f,["name"])||"")));
-    var typePretty = prettyType(pickField(f,["type","otype","object_type","type_fr"]));
-    var constRaw = pickField(f,["constabbr","constellation","const","con","constellation_en","constellation_fr"]);
-    var constAbbr = constAbbrFromField(constRaw);
-    var coords = extractCoords(f);
-    var common = pickField(f,["name_fr","popular_name_fr","name","proper_name","common_name"]);
-    var distLy = extractDistanceLyStrict(f);
-    var extra=[];
-    if(m && (ngc||ic)){ extra.push([ngc?("NGC "+ngc):"", ic?("IC "+ic):""].filter(function(s){return !!s}).join(" / ")); }
-    else if(ngc && ic){ extra.push("NGC "+ngc+" / IC "+ic); }
-    if(typePretty) extra.push(typePretty);
-    if(constAbbr) extra.push(IAU_LAT[constAbbr]);
-    if(common && !looksLikeCatalogCode(common)) extra.push(common);
-    return {
-      label: nom + (extra.length?(" — "+extra.join(" — ")):""),
-      nom: nom,
-      type: typePretty || "",
-      constellationAbbr: constAbbr || "",
-      raHours: coords.raHours,
-      decDeg: coords.decDeg,
-      commonName: (looksLikeCatalogCode(common)? "": (common||"")),
-      distanceLy: distLy
-    };
-  }
-
-  async function searchSkyObjectsDatastro(query){
-    if(!query||query.length<1) return [];
-    var q = String(query).trim();
-    var out=[]; var seen=new Set();
-    function push(o){ var k=normalizeName(o.nom||o.label||""); if(!k||seen.has(k))return; seen.add(k); out.push(o); }
-
-    var mNum=messierNumber(q), nNum=ngcNumber(q), iNum=icNumber(q);
-
-    try{
-      if(nNum!=null){
-        var r=await fetchDatastro("ngc-ic-messier-catalog","rows=6&refine.ngc="+encodeURIComponent(nNum));
-        var recs=(r&&r.records)||[]; recs.map(function(x){return x.fields||{}}).forEach(function(f){ push(buildLabelFromNGCFields(f)); });
-      }
-    }catch(_){}
-    try{
-      if(iNum!=null){
-        var r=await fetchDatastro("ngc-ic-messier-catalog","rows=6&refine.ic="+encodeURIComponent(iNum));
-        var recs=(r&&r.records)||[]; recs.map(function(x){return x.fields||{}}).forEach(function(f){ push(buildLabelFromNGCFields(f)); });
-      }
-    }catch(_){}
-    try{
-      if(mNum!=null){
-        var r=await fetchDatastro("catalogue-de-messier","rows=6&refine.m="+encodeURIComponent(mNum));
-        var recs=(r&&r.records)||[];
-        for(var i=0;i<recs.length;i++){
-          var f=recs[i].fields||{};
-          var ngc = pickField(f,["ngc"]); var ic = pickField(f,["ic"]);
-          var nom = "M"+mNum;
-          var typePretty = prettyType(pickField(f,["type","type_fr","object_type"]));
-          var constAbbr = constAbbrFromField(pickField(f,["constabbr","constellation","constellation_en","constellation_fr","const"]));
-          var coords = extractCoords(f);
-          var common = pickField(f,["name_fr","popular_name_fr","name","common_name"]);
-          var distLy = extractDistanceLyStrict(f);
-          var extras=[];
-          if(ngc||ic){ extras.push([ngc?("NGC "+ngc):"", ic?("IC "+ic):""].filter(function(s){return !!s}).join(" / ")); }
-          if(typePretty) extras.push(typePretty);
-          if(constAbbr) extras.push(IAU_LAT[constAbbr]);
-          if(common && !looksLikeCatalogCode(common)) extras.push(common);
-          push({ label: nom+(extras.length?(" — "+extras.join(" — ")):""), nom:nom, type:typePretty||"", constellationAbbr: constAbbr||"", raHours:coords.raHours, decDeg:coords.decDeg, commonName:common||"", distanceLy: distLy });
-        }
-      }
-    }catch(_){}
-
-    var variants=[q];
-    var compact=q.replace(/\s+/g,''); if(compact!==q) variants.push(compact);
-    function addV(prefix,num){ if(num==null)return; variants.push(prefix+" "+num); variants.push(prefix+num); variants.push(prefix+"-"+num); }
-    addV("NGC", nNum); addV("IC", iNum); addV("M", mNum);
-    var used=new Set();
-    for(var i=0;i<variants.length && i<4;i++){
-      var v=variants[i]; if(used.has(v)) continue; used.add(v);
-      try{
-        var r=await fetchDatastro("ngc-ic-messier-catalog","q="+encodeURIComponent(v)+"&rows=6");
-        var recs=(r&&r.records)||[]; recs.map(function(x){return x.fields||{}}).forEach(function(f){ push(buildLabelFromNGCFields(f)); });
-      }catch(_){}
-    }
-    return out;
-  }
-
-  async function enrichObjectFromAPI(mainName){
-    var mN=messierNumber(mainName), nN=ngcNumber(mainName), iN=icNumber(mainName);
-    function packFromFields(f, messier){
-      if(!f) return null;
-      var t = prettyType(pickField(f,["type","otype","object_type","type_fr"]))||"";
-      var ab= constAbbrFromField(pickField(f,["constabbr","constellation","const","con","constellation_en","constellation_fr"]))||"";
-      var coords = extractCoords(f);
-      var common = pickField(f,["name_fr","popular_name_fr","name","proper_name","common_name"])||"";
-      var d = extractDistanceLyStrict(f);
-      return { type:t, constellationAbbr:ab, raHours:coords.raHours, decDeg:coords.decDeg, commonName:common, distanceLy:d };
-    }
-    try{
-      if(mN!=null){
-        var r=await fetchDatastro("catalogue-de-messier","rows=1&refine.m="+encodeURIComponent(mN));
-        var f=(r&&r.records&&r.records[0]&&r.records[0].fields)||null;
-        var p=packFromFields(f,true); if(p) return p;
-      }
-    }catch(_){}
-    try{
-      if(nN!=null){
-        var r=await fetchDatastro("ngc-ic-messier-catalog","rows=1&refine.ngc="+encodeURIComponent(nN));
-        var f=(r&&r.records&&r.records[0]&&r.records[0].fields)||null;
-        var p=packFromFields(f,false); if(p) return p;
-      }
-    }catch(_){}
-    try{
-      if(iN!=null){
-        var r=await fetchDatastro("ngc-ic-messier-catalog","rows=1&refine.ic="+encodeURIComponent(iN));
-        var f=(r&&r.records&&r.records[0]&&r.records[0].fields)||null;
-        var p=packFromFields(f,false); if(p) return p;
-      }
-    }catch(_){}
-    try{
-      var r=await fetchDatastro("ngc-ic-messier-catalog","rows=1&q="+encodeURIComponent(mainName));
-      var f=(r&&r.records&&r.records[0]&&r.records[0].fields)||null;
-      var p=packFromFields(f,false); if(p) return p;
-    }catch(_){}
-    return { type:"", constellationAbbr:"", raHours:null, decDeg:null, commonName:"", distanceLy:null };
-  }
-
-  /* ---------- Villes ---------- */
-  async function searchCitiesGeoDB(query){
-    if(!query||query.length<2) return [];
-    try{
-      var r=await fetch("https://geodb-free-service.wirefreethought.com/v1/geo/cities?namePrefix="+encodeURIComponent(query)+"&limit=8&sort=-population");
-      if(r.ok){ var j=await r.json(); var d=j&&j.data?j.data:[]; return d.map(function(c){ return {label:c.city+", "+c.country, city:c.city, country:c.country, lat:c.latitude, lon:c.longitude}; }); }
-    }catch(_){}
-    try{
-      var r2=await fetch("https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(query)+"&count=8&language=fr&format=json");
-      if(r2.ok){ var j2=await r2.json(); var res=j2&&j2.results?j2.results:[]; return res.map(function(c){ return {label:c.name+(c.country?(", "+c.country):""), city:c.name, country:c.country||"", lat:c.latitude, lon:c.longitude}; }); }
-    }catch(_){}
-    return [];
-  }
-
-  /* ---------- UI ---------- */
-  function Modal(props){
-    var open=props.open, title=props.title, children=props.children, onClose=props.onClose, onSubmit=props.onSubmit, submitLabel=props.submitLabel;
-    useEffect(function(){ document.body.classList.toggle('modal-open', open); return function(){ document.body.classList.remove('modal-open'); }; }, [open]);
-    if(!open) return null;
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center">
-        <button className="absolute inset-0 bg-black/60" onClick={onClose} aria-label="Fermer"></button>
-        <div className="relative w-full max-w-3xl mx-4 rounded-xl bg-gray-900 shadow-xl border border-gray-800 p-6 max-h-[90vh] overflow-y-auto">
-          <div className="flex items-center justify-between mb-4 sticky top-0 bg-gray-900">
-            <h3 className="text-lg font-semibold">{title}</h3>
-            <button onClick={onClose} className="p-2 rounded hover:bg-gray-800">✕</button>
-          </div>
-          <div className="space-y-4">{children}</div>
-          <div className="mt-6 flex justify-end gap-3 sticky bottom-0 bg-gray-900 pt-4">
-            <button onClick={onClose} className="px-4 py-2 rounded border border-gray-700 hover:bg-gray-800">Annuler</button>
-            {onSubmit ? <button onClick={onSubmit} className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">{submitLabel||"Enregistrer"}</button> : null}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function AutoCompleteInput(props){
-    var value=props.value, setValue=props.setValue, placeholder=props.placeholder, fetcher=props.fetcher, onPick=props.onPick;
-    var _useState=useState(value||""), q=_useState[0], setQ=_useState[1];
-    var _useState2=useState([]), items=_useState2[0], setItems=_useState2[1];
-    var _useState3=useState(false), open=_useState3[0], setOpen=_useState3[1];
-    var _useState4=useState(false), loading=_useState4[0], setLoading=_useState4[1];
-    useEffect(function(){ setQ(value||""); },[value]);
-    async function handleChange(v){
-      setQ(v); if(setValue) setValue(v);
-      if(v && v.length>=1){ setLoading(true); var res=await fetcher(v); setItems(res); setLoading(false); setOpen(true); }
-      else{ setItems([]); setOpen(false); }
-    }
-    async function pick(item){
-      var label=(item&&item.label)?item.label:item;
-      setQ(label); if(setValue) setValue(label);
-      if(onPick) await onPick(item);
-      setOpen(false);
-    }
-    return (
-      <div className="relative">
-        <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-               placeholder={placeholder} value={q}
-               onChange={function(e){handleChange(e.target.value);}}
-               onFocus={function(){ if(q && q.length>=1) setOpen(true); }} autoComplete="off"/>
-        {loading ? <div className="absolute right-3 top-2.5 text-sm opacity-70">…</div> : null}
-        {open && items.length>0 ? (
-          <div className="absolute mt-1 w-full max-h-60 overflow-auto rounded-md border border-gray-700 bg-gray-900 shadow-lg z-10">
-            {items.map(function(it,i){
-              return (
-                <button key={i} className="w-full text-left px-3 py-2 hover:bg-gray-800" onClick={function(){ pick(it); }} type="button">
-                  {(typeof it==="string")?it:it.label}
-                </button>
-              );
-            })}
-          </div>
-        ):null}
-      </div>
-    );
-  }
-
-  /* ---------- Data ---------- */
-  function initialNight(){
-    return { id:uid(), date:"", time:"", location:"", lat:null, lon:null, bortle:4,
-             telescope:"", telescopeId:null, diameter:null, focal:null, meteo:"", objects:[] };
-  }
-  function parseNightDateTime(n){
-    if(!n || !n.date) return null;
-    var p=n.date.split('-'); if(p.length<3) return null;
-    var y=parseInt(p[0],10), m=parseInt(p[1],10), d=parseInt(p[2],10);
-    var hh=0, mm=0;
-    if(n.time && /^\d{2}:\d{2}/.test(n.time)){ var t=n.time.split(':'); hh=parseInt(t[0],10)||0; mm=parseInt(t[1],10)||0; }
-    return new Date(y,m-1,d,hh,mm,0,0);
-  }
-  function isPastNight(n){ var dt=parseNightDateTime(n); if(!dt) return false; return dt.getTime()<Date.now(); }
-
-  /* ---------- Forms ---------- */
-  function NightForm(props){
-    var draft=props.draft, setDraft=props.setDraft, telescopes=props.telescopes;
-    function onPickTelescopeId(id){
-      var t=telescopes.find(function(x){return x.id===id;});
-      if(t){ setDraft(assign(draft,{ telescopeId:t.id, telescope:t.name, diameter:t.diameter||null, focal:t.focal||null })); }
-      else{ setDraft(assign(draft,{ telescopeId:null })); }
-    }
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div><label className="block text-sm mb-1">Date</label>
-          <input type="date" value={draft.date} onChange={function(e){setDraft(assign(draft,{date:e.target.value}));}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
-        <div><label className="block text-sm mb-1">Heure de début</label>
-          <input type="time" value={draft.time} onChange={function(e){setDraft(assign(draft,{time:e.target.value}));}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
-        <div className="md:col-span-2"><label className="block text-sm mb-1">Lieu (auto-complétion)</label>
-          <AutoCompleteInput value={draft.location} setValue={function(v){setDraft(assign(draft,{location:v}));}} placeholder="Ville, Pays" fetcher={searchCitiesGeoDB}
-            onPick={function(item){ setDraft(assign(draft,{ location:item?item.label:draft.location, lat:(item&&item.lat)||null, lon:(item&&item.lon)||null })); }}/></div>
-        <div><label className="block text-sm mb-1">Bortle</label>
-          <select value={draft.bortle} onChange={function(e){setDraft(assign(draft,{bortle:parseInt(e.target.value,10)}));}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2">{[1,2,3,4,5,6,7,8,9].map(function(v){return <option key={v} value={v}>Bortle {v}</option>;})}</select></div>
-        <div><label className="block text-sm mb-1">Télescope (Paramètres)</label>
-          <select value={draft.telescopeId||""} onChange={function(e){onPickTelescopeId(e.target.value||null);}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2">
-            <option value="">— Aucun</option>
-            {telescopes.map(function(t){return <option key={t.id} value={t.id}>{t.name}</option>;})}
-          </select></div>
-        <div><label className="block text-sm mb-1">Nom (affiché)</label>
-          <input value={draft.telescope||""} onChange={function(e){setDraft(assign(draft,{telescope:e.target.value}));}} placeholder="Ex: Flextube 400, C8…" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
-        <div><label className="block text-sm mb-1">Diamètre (mm)</label>
-          <input type="number" min="20" step="1" value={(draft.diameter!=null?draft.diameter:"")} onChange={function(e){setDraft(assign(draft,{diameter:e.target.value?Number(e.target.value):null}));}} placeholder="Ex: 400" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
-        <div><label className="block text-sm mb-1">Focale (mm)</label>
-          <input type="number" min="100" step="1" value={(draft.focal!=null?draft.focal:"")} onChange={function(e){setDraft(assign(draft,{focal:e.target.value?Number(e.target.value):null}));}} placeholder="Ex: 1800" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
-        <div className="md:col-span-2"><label className="block text-sm mb-1">Météo (libre)</label>
-          <input value={draft.meteo} onChange={function(e){setDraft(assign(draft,{meteo:e.target.value}));}} placeholder="Ex: ciel dégagé, 12°C, vent faible" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/></div>
-      </div>
-    );
-  }
-
-  /* ---------- Oculaires / recommandations ---------- */
-  function buildScope(diameter, focal){ var D=Number(diameter), F=Number(focal); if(!D||!F||D<=0||F<=0) return null; return { aperture_mm:D, focal_mm:F, f_ratio:F/D }; }
-  function exitPupilRangeFor(type, filters){
-    var t=(type||"").toLowerCase(), range=[2,4];
-    if(t.indexOf("planétaire")>=0 || t.indexOf("planetary")>=0) range=[0.8,1.5];
-    else if(t.indexOf("double")>=0) range=[0.5,1.2];
-    else if(t.indexOf("amas glob")>=0) range=[1,1.8];
-    else if(t.indexOf("galax")>=0) range=[1.5,3];
-    else if(t.indexOf("amas ouvert")>=0 || t.indexOf("open")>=0) range=[2.5,5];
-    else if(t.indexOf("h ii")>=0 || t.indexOf("émission")>=0 || t.indexOf("neb")>=0 || t.indexOf("nébuleuse")>=0) range=[3,5.5];
-    var strong=filters && (filters.uhc || filters.oiii || filters.hbeta);
-    if(strong){ var minAdd=(filters.hbeta?4:3.5), maxAdd=(filters.hbeta?6.5:6); if(range[0]<minAdd) range[0]=minAdd; if(range[1]<maxAdd) range[1]=maxAdd; }
-    if(range[0]<0.5) range[0]=0.5; if(range[1]>7) range[1]=7; if(range[1]<range[0]) range[1]=range[0];
-    return range;
-  }
-  function suggestionForScopeAndObject(scope, type, filters){
-    if(!scope) return null; var r=exitPupilRangeFor(type,filters); var min=r[0]*scope.f_ratio, max=r[1]*scope.f_ratio; return { eflMin:min, eflMax:max, center:(min+max)/2 };
-  }
-  function recommendEyepieceId(scope, type, filters, eyepieces){
-    if(!scope || !eyepieces || !eyepieces.length) return null;
-    var s=suggestionForScopeAndObject(scope,type,filters); if(!s) return null;
-    var center=s.center, min=s.eflMin, max=s.eflMax;
-    var best=null, bestScore=Infinity;
-    for(var i=0;i<eyepieces.length;i++){
-      var ep=eyepieces[i]; var fl=Number(ep.focal)||0; if(fl<=0) continue;
-      var dist; if(fl<min) dist=(min-fl)+0.1; else if(fl>max) dist=(fl-max)+0.1; else dist=Math.abs(fl-center);
-      if(dist<bestScore){ bestScore=dist; best=ep; }
-    }
-    return best?best.id:null;
-  }
-  function recommendedFiltersForType(objType){
-    var t=String(objType||"").toLowerCase();
-    if(t.indexOf("planétaire")>=0 || t.indexOf("planetary")>=0) return { uhc:true, oiii:true, hbeta:true };
-    if(t.indexOf("h ii")>=0 || t.indexOf("hii")>=0 || t.indexOf("émission")>=0 || t.indexOf("emission")>=0) return { uhc:true, oiii:true, hbeta:true };
-    if(t.indexOf("snr")>=0 || t.indexOf("rémanent")>=0 || t.indexOf("remnant")>=0) return { uhc:false, oiii:true, hbeta:false };
-    if(t.indexOf("réflexion")>=0 || t.indexOf("reflection")>=0) return { uhc:false, oiii:false, hbeta:false };
-    if(t.indexOf("obscur")>=0 || t.indexOf("dark")>=0) return { uhc:false, oiii:false, hbeta:false };
-    if(t.indexOf("galax")>=0 || t.indexOf("amas")>=0 || t.indexOf("cluster")>=0 || t.indexOf("étoile")>=0 || t.indexOf("star")>=0) return { uhc:false, oiii:false, hbeta:false };
-    return { uhc:false, oiii:false, hbeta:false };
-  }
-
-  function ObjectForm(props){
-    var draft=props.draft, setDraft=props.setDraft, errors=props.errors, nightScope=props.nightScope, eyepieces=props.eyepieces, constLang=props.constLang;
-    var errNom = errors && errors.nom;
-    var errCon = errors && errors.constellation;
-
-    var bestNoFilterId = useMemo(function(){
-      return recommendEyepieceId(nightScope, draft.type||"", {}, eyepieces);
-    }, [nightScope && nightScope.focal_mm, nightScope && nightScope.f_ratio, draft.type, eyepieces && eyepieces.length]);
-
-    var bestWithFilterId = useMemo(function(){
-      var rec = recommendedFiltersForType(draft.type||"");
-      return recommendEyepieceId(nightScope, draft.type||"", rec, eyepieces);
-    }, [nightScope && nightScope.focal_mm, nightScope && nightScope.f_ratio, draft.type, eyepieces && eyepieces.length]);
-
-    function toggleEp(id){
-      var list = Array.isArray(draft.epIds)?draft.epIds.slice():[];
-      var i = list.indexOf(id); if(i>=0) list.splice(i,1); else list.push(id);
-      setDraft(assign(draft,{epIds:list}));
-    }
-    function hintForEp(ep){
-      if(!ep) return "";
-      var noF = (bestNoFilterId && ep.id===bestNoFilterId);
-      var wF  = (bestWithFilterId && ep.id===bestWithFilterId);
-      if(noF && wF) return " (conseillé avec ou sans filtre)";
-      if(wF) return " (conseillé avec filtre)";
-      if(noF) return " (conseillé)";
+    /* ==============================
+       Constellations (latin)
+    ============================== */
+    var IAU_LAT = {And:"Andromeda",Ant:"Antlia",Aps:"Apus",Aql:"Aquila",Aqr:"Aquarius",Ara:"Ara",Ari:"Aries",Aur:"Auriga",Boo:"Boötes",Cae:"Caelum",Cam:"Camelopardalis",Cap:"Capricornus",Car:"Carina",Cas:"Cassiopeia",Cen:"Centaurus",Cep:"Cepheus",Cet:"Cetus",Cha:"Chamaeleon",Cir:"Circinus",CMa:"Canis Major",CMi:"Canis Minor",Cnc:"Cancer",Col:"Columba",Com:"Coma Berenices",CrA:"Corona Australis",CrB:"Corona Borealis",Crt:"Crater",Cru:"Crux",Crv:"Corvus",CVn:"Canes Venatici",Cyg:"Cygnus",Del:"Delphinus",Dor:"Dorado",Dra:"Draco",Equ:"Equuleus",Eri:"Eridanus",For:"Fornax",Gem:"Gemini",Gru:"Grus",Her:"Hercules",Hor:"Horologium",Hya:"Hydra",Hyi:"Hydrus",Ind:"Indus",Lac:"Lacerta",Leo:"Leo",Lep:"Lepus",Lib:"Libra",Lup:"Lupus",Lyn:"Lynx",Lyr:"Lyra",Men:"Mensa",Mic:"Microscopium",Mon:"Monoceros",Mus:"Musca",Nor:"Norma",Oct:"Octans",Oph:"Ophiuchus",Ori:"Orion",Pav:"Pavo",Peg:"Pegasus",Per:"Perseus",Phe:"Phoenix",Pic:"Pictor",PsA:"Piscis Austrinus",Psc:"Pisces",Pup:"Puppis",Pyx:"Pyxis",Ret:"Reticulum",Scl:"Sculptor",Sco:"Scorpius",Sct:"Scutum",Ser:"Serpens",Sex:"Sextans",Sge:"Sagitta",Sgr:"Sagittarius",Tau:"Taurus",Tel:"Telescopium",Tri:"Triangulum",TrA:"Triangulum Australe",Tuc:"Tucana",UMa:"Ursa Major",UMi:"Ursa Minor",Vel:"Vela",Vir:"Virgo",Vol:"Volans",Vul:"Vulpecula"};
+    var VALID_ABBR = new Set(Object.keys(IAU_LAT));
+    function ensureConstAbbr(s){
+      if(!s) return "";
+      s=String(s).trim();
+      var compact=s.replace(/\s+/g,"");
+      if(VALID_ABBR.has(compact)) return compact;
+      var map={Sagittaire:"Sgr",Orion:"Ori",Hercule:"Her",Hercules:"Her",Scutum:"Sct",Cygne:"Cyg",Lyre:"Lyr",Sagittarius:"Sgr",Cygnus:"Cyg"};
+      if(map[s]) return map[s];
       return "";
     }
+    function prettyConstellation(v){ var ab=ensureConstAbbr(v); return ab?IAU_LAT[ab]:(v||""); }
 
-    return (
-      <div className="space-y-4">
-        <div>
-          <label className="block text-sm mb-1">Nom / Désignation <span className="text-red-400">*</span></label>
-          <AutoCompleteInput
-            value={draft.nom}
-            setValue={function(v){ setDraft(assign(draft,{nom:v})); }}
-            placeholder="Ex: M13, M42, NGC 6992…"
-            fetcher={searchSkyObjectsDatastro}
-            onPick={async function(item){
-              var nom=(item&&item.nom)?item.nom:draft.nom;
-              var type=(item&&item.type)?item.type:draft.type;
-              var constAbbr=(item&&item.constellationAbbr)?item.constellationAbbr:draft.constellationAbbr;
-              var raHours=(item&&item.raHours!=null)?item.raHours:draft.raHours;
-              var decDeg =(item&&item.decDeg!=null)?item.decDeg:draft.decDeg;
-              var commonName=(item&&item.commonName)?item.commonName:draft.commonName;
-              var distanceLy=(item&&item.distanceLy!=null)?item.distanceLy:draft.distanceLy;
+    /* ==============================
+       Types lisibles
+    ============================== */
+    function prettyType(raw){
+      if(!raw) return "";
+      var t=String(raw).toLowerCase();
+      var map={
+        g:"Galaxie", gx:"Galaxie", galaxy:"Galaxie",
+        gpair:"Paire de galaxies", gtrpl:"Triplet de galaxies", ggroup:"Groupe de galaxies",
+        ocl:"Amas ouvert", gcl:"Amas globulaire", cluster:"Amas", opencluster:"Amas ouvert", globularcluster:"Amas globulaire",
+        pn:"Nébuleuse planétaire", hii:"Région H II", neb:"Nébuleuse", emn:"Nébuleuse en émission", rfn:"Nébuleuse par réflexion", dn:"Nébuleuse obscure", snr:"Rémanent de supernova",
+        ast:"Astérisme", star:"Étoile", doublestar:"Étoile double"
+      };
+      return map[t]||raw;
+    }
 
-              if(!type || !constAbbr || raHours==null || decDeg==null || !commonName){
-                var ex=await enrichObjectFromAPI(nom);
-                if(!type) type=ex.type;
-                if(!constAbbr) constAbbr=ex.constellationAbbr;
-                if(raHours==null) raHours=ex.raHours;
-                if(decDeg==null) decDeg=ex.decDeg;
-                if(!commonName) commonName=ex.commonName;
-                if(distanceLy==null) distanceLy=ex.distanceLy;
-              }
-              setDraft(assign(draft,{ nom:nom, type:type, constellationAbbr: constAbbr, raHours:raHours, decDeg:decDeg, commonName:commonName, distanceLy:distanceLy }));
-            }}
-          />
-          {errNom ? <p className="text-sm text-red-400 mt-1">{errNom}</p> : null}
-        </div>
+    /* ==============================
+       Parsing/champs & Datastro
+    ============================== */
+    function pickField(obj, names){
+      if(!obj) return "";
+      for(var i=0;i<names.length;i++){
+        var n=names[i];
+        if(obj[n]!=null && obj[n]!=="") return obj[n];
+        var k=Object.keys(obj).find(function(K){ return K.toLowerCase()===n.toLowerCase(); });
+        if(k && obj[k]!=null && obj[k]!=="") return obj[k];
+      }
+      return "";
+    }
+    function parseRAHours(v){
+      if(v==null || v==="") return null;
+      if(typeof v==="number") return (v>24? v/15 : v);
+      var s=String(v).trim();
+      if(/^\d+(\.\d+)?$/.test(s)){ var n=parseFloat(s); return (n>24? n/15 : n); }
+      var parts=s.replace(/[hms°'"]/g,' ').replace(/\s+/g,' ').trim().split(' ');
+      var hh=parseFloat(parts[0])||0, mm=parseFloat(parts[1])||0, ss=parseFloat(parts[2])||0;
+      return hh + mm/60 + ss/3600;
+    }
+    function parseDecDeg(v){
+      if(v==null || v==="") return null;
+      if(typeof v==="number") return v;
+      var s=String(v).trim(); var sign=(s[0]==='-'?-1:1);
+      s=s.replace(/[hms°'"]/g,' ').replace(/[+\-]/g,' ').trim();
+      var parts=s.split(/\s+/);
+      var dd=parseFloat(parts[0])||0, mm=parseFloat(parts[1])||0, ss=parseFloat(parts[2])||0;
+      return sign*(Math.abs(dd)+mm/60+ss/3600);
+    }
+    function extractCoords(f){ return { raHours: parseRAHours(pickField(f,["ra","raj2000","ra_j2000","ra_deg","ra2000","ra_hours"])), decDeg: parseDecDeg(pickField(f,["dec","dej2000","dec_j2000","dec_deg","dec2000","declination"])) }; }
+    function extractConstellation(f){
+      var raw = pickField(f,["constellation","const","con","constabbr"]);
+      var ab = ensureConstAbbr(raw);
+      return ab ? IAU_LAT[ab] : (raw||"");
+    }
+    function extractCommonName(f){
+      var c=pickField(f,["common_names","common_name","popular_name","proper_name","name_fr","name"]);
+      if(!c) return "";
+      if(Array.isArray(c)) return c.filter(function(x){return !!x;}).join(", ");
+      return String(c);
+    }
+    function parseSizeArcmin(f){
+      var fields=["majax","major_axis","major","size","dimension","diameter","diam","dim","dmaj","maj"];
+      for(var i=0;i<fields.length;i++){
+        var v=f[fields[i]];
+        if(v==null || v==="") continue;
+        if(typeof v==="number"){ if(v>0) return v; }
+        var s=String(v).toLowerCase();
+        var m=s.match(/(\d+(\.\d+)?)\s*°/); if(m) return parseFloat(m[1])*60;
+        var m2=s.match(/(\d+(\.\d+)?)\s*(?:'|arcmin|min)/); if(m2) return parseFloat(m2[1]);
+        var m3=s.match(/(\d+(\.\d+)?)(?:\s*[×x]\s*(\d+(\.\d+)?))?/);
+        if(m3){ var a=parseFloat(m3[1]); if(!isNaN(a)&&a>0) return a; }
+      }
+      return null;
+    }
+    async function odsSearch(params){
+      var dataset="ngc-ic-messier-catalog";
+      var url="https://www.datastro.eu/api/records/1.0/search/?dataset="+dataset+"&"+params;
+      if(!/(\?|&)sort=/.test(url)) url += "&sort=name";
+      try{ var r=await fetch(url); if(!r.ok) return null; return await r.json(); }catch(e){ return null; }
+    }
+    function fieldCI(f,name){
+      if(!f) return undefined;
+      var k=Object.keys(f).find(function(K){ return K.toLowerCase()===name.toLowerCase(); });
+      return k?f[k]:undefined;
+    }
+    function nameMatchesTag(f, tag, num){
+      var nm = fieldCI(f,"name"); if(!nm) return false;
+      var comp = String(nm).toUpperCase().replace(/\s+/g,"");
+      return comp === (tag.toUpperCase()+String(num));
+    }
+    function matchExactByTag(f, tag, num){
+      var val = fieldCI(f, tag);
+      if(val!=null && val!==""){
+        if(digits(val) === String(num)) return true;
+      }
+      return nameMatchesTag(f, tag, num);
+    }
+    function primaryLabelFromFields(f){
+      var m=fieldCI(f,"m"), ngc=fieldCI(f,"ngc"), ic=fieldCI(f,"ic");
+      if(m){ var d = digits(m); if(d) return "M "+d; }
+      if(ngc){ var d2=digits(ngc); if(d2) return "NGC "+d2; }
+      if(ic){ var d3=digits(ic); if(d3) return "IC "+d3; }
+      var nm=fieldCI(f,"name"); if(nm) return String(nm);
+      return "Objet";
+    }
+    function buildItemFromRecord(f){
+      var labelMain = primaryLabelFromFields(f);
+      var cons = extractConstellation(f);
+      var type = prettyType(pickField(f,["type","object_type","otype"]));
+      var coords=extractCoords(f);
+      var common = extractCommonName(f);
+      var sizeA = parseSizeArcmin(f);
+      var extras=[]; if(common) extras.push(common); if(type) extras.push(type); if(cons) extras.push(cons);
+      return {
+        label: labelMain + (extras.length?(" — "+extras.join(" — ")):""),
+        nom: labelMain,
+        type: type,
+        constellation: cons,
+        raHours: coords.raHours,
+        decDeg: coords.decDeg,
+        commonName: common,
+        sizeArcmin: sizeA
+      };
+    }
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm mb-1">Constellation <span className="text-red-400">*</span></label>
-            <input value={displayConstellation(draft.constellationAbbr, constLang)}
-                   onChange={function(e){
-                     var ab=constAbbrFromField(e.target.value);
-                     setDraft(assign(draft,{constellationAbbr:ab}));
-                   }}
-                   placeholder="Ex: Cygnus / Cyg" className={(errCon?"border-red-500 ":"border-gray-700 ")+"w-full rounded-md border px-3 py-2 bg-gray-800"}/>
-            {errCon ? <p className="text-sm text-red-400 mt-1">{errCon}</p> : <p className="text-xs opacity-70 mt-1">Renseigné automatiquement via l’API après sélection.</p>}
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Type (depuis l’API)</label>
-            <input value={draft.type||""} onChange={function(e){ setDraft(assign(draft,{type:e.target.value})); }} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-          </div>
-        </div>
+    /* ==============================
+       Recherche (UNE requête, espaces retirés)
+    ============================== */
+    function parseCatalogInput(raw){
+      var s=String(raw||"").toUpperCase().replace(/\s+/g,"").replace(/\s*-\s*/g,"").trim();
+      var m=s.match(/^M(\d{1,3})$/); if(m) return {cat:"M", num:parseInt(m[1],10)};
+      var n=s.match(/^NGC(\d{1,5})$/); if(n) return {cat:"NGC", num:parseInt(n[1],10)};
+      var i=s.match(/^IC(\d{1,5})$/); if(i) return {cat:"IC", num:parseInt(i[1],10)};
+      return {cat:null,num:null, compact:s};
+    }
+    async function searchSkyObjectsDatastro(input){
+      var raw=String(input||"");
+      var compact = raw.replace(/\s+/g,"");
+      var parsed = parseCatalogInput(raw);
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm mb-1">Page Sky Atlas</label>
-            <input value={draft.pageAtlas||""} onChange={function(e){ setDraft(assign(draft,{pageAtlas:e.target.value})); }} placeholder="Ex: Uranometria p.123" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-          </div>
-          <div>
-            <label className="block text-sm mb-1">AD (h)</label>
-            <input value={(draft.raHours!=null?draft.raHours:"")} onChange={function(e){ var v=e.target.value; setDraft(assign(draft,{raHours:(v===""?null:Number(v))})); }} placeholder="Ex: 16.42" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Déc (°)</label>
-            <input value={(draft.decDeg!=null?draft.decDeg:"")} onChange={function(e){ var v=e.target.value; setDraft(assign(draft,{decDeg:(v===""?null:Number(v))})); }} placeholder="Ex: +36.47" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-          </div>
-        </div>
+      var j = await odsSearch("rows=200&q="+encodeURIComponent(compact));
+      var recs = (j && j.records) ? j.records : [];
+      var items = recs.map(function(r){ return buildItemFromRecord(r.fields||{}); });
 
-        <div>
-          <label className="block text-sm mb-1">Oculaires</label>
-          {(!eyepieces || eyepieces.length===0) ? (
-            <div className="text-sm opacity-70">Aucun oculaire enregistré. Ouvre les Paramètres (⚙️) pour en ajouter.</div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {eyepieces.map(function(ep){
-                var checked = (Array.isArray(draft.epIds) && draft.epIds.indexOf(ep.id)>=0);
+      if(parsed.cat==="M" || parsed.cat==="NGC" || parsed.cat==="IC"){
+        var tag = (parsed.cat==="M"?"m": parsed.cat.toLowerCase());
+        var num = parsed.num;
+        items = recs
+          .filter(function(r){ return matchExactByTag(r.fields||{}, tag, num); })
+          .map(function(r){ return buildItemFromRecord(r.fields||{}); });
+      }
+
+      var seen={}, uniq=[];
+      for(var k=0;k<items.length;k++){
+        var key=items[k].nom+"|"+(items[k].commonName||"");
+        if(!seen[key]){ seen[key]=1; uniq.push(items[k]); }
+      }
+      return uniq;
+    }
+
+    /* ==============================
+       Villes (sans clé)
+    ============================== */
+    async function searchCities(query){
+      if(!query||query.length<2) return [];
+      try{
+        var u="https://geodb-free-service.wirefreethought.com/v1/geo/cities?namePrefix="+encodeURIComponent(query)+"&limit=8&sort=-population";
+        var r=await fetch(u); if(!r.ok) throw 0;
+        var j=await r.json(); var d=j&&j.data?j.data:[];
+        return d.map(function(c){ return {label:c.city+", "+c.country, city:c.city, country:c.country, lat:c.latitude, lon:c.longitude}; });
+      }catch(e){
+        try{
+          var u2="https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(query)+"&count=8&language=fr&format=json";
+          var r2=await fetch(u2); if(!r2.ok) return [];
+          var j2=await r2.json(); var d2=j2&&j2.results?j2.results:[];
+          return d2.map(function(c){ return {label:c.name+(c.country?(", "+c.country):""), city:c.name, country:c.country||"", lat:c.latitude, lon:c.longitude}; });
+        }catch(_){ return []; }
+      }
+    }
+
+    /* ==============================
+       Oculaires / recommandations
+    ============================== */
+    function buildScope(diameter, focal){
+      var D = Number(diameter), F = Number(focal);
+      if(!D || !F || D<=0 || F<=0) return null;
+      return { aperture_mm:D, focal_mm:F, f_ratio: F/D };
+    }
+    function exitPupilRangeFor(type, filters){
+      var t=(type||"").toLowerCase();
+      var r=[2,4];
+      if(t.indexOf("planét")>=0 || t.indexOf("planetary")>=0) r=[1.5,3];
+      else if(t.indexOf("double")>=0) r=[0.5,1.2];
+      else if(t.indexOf("globul")>=0) r=[1,2];
+      else if(t.indexOf("galax")>=0) r=[1.5,3];
+      else if(t.indexOf("amas ouvert")>=0 || t.indexOf("open")>=0) r=[2.5,5];
+      else if(t.indexOf("h ii")>=0 || t.indexOf("émission")>=0 || t.indexOf("neb")>=0) r=[3,5];
+      else if(t.indexOf("réflex")>=0 || t.indexOf("reflection")>=0) r=[2.5,4.5];
+
+      if(filters && (filters.hbeta || filters.oiii || filters.uhc)){
+        if(filters.hbeta){ r=[4,6.5]; }
+        else if(filters.oiii){
+          if(t.indexOf("planét")>=0 || t.indexOf("snr")>=0 || t.indexOf("rémanent")>=0){ r=[2,3.5]; }
+          else{ r=[3,5]; }
+        }else if(filters.uhc){ r=[3,5]; }
+      }
+      r[0]=Math.max(0.5,r[0]); r[1]=Math.min(7,r[1]); if(r[1]<r[0]) r=[r[0],r[0]];
+      return r;
+    }
+    function tfovDegrees(scope, ep){
+      var afov = (ep && ep.afov)? Number(ep.afov):50;
+      var mag = scope? (scope.focal_mm / (Number(ep.focal)||1)) : null;
+      if(!mag || mag<=0) return null;
+      return afov / mag;
+    }
+    function recommendEyepieceId(scope, type, filters, eyepieces, sizeArcmin){
+      if(!scope||!eyepieces||!eyepieces.length) return null;
+      var r=exitPupilRangeFor(type, filters); 
+      var epMin=r[0], epMax=r[1];
+      var eflMin=epMin*scope.f_ratio, eflMax=epMax*scope.f_ratio;
+      var targetTfovDeg = null;
+      if(sizeArcmin!=null && sizeArcmin>0){ targetTfovDeg = (sizeArcmin/60)*1.2; }
+      var best=null,score=1e12;
+      for(var i=0;i<eyepieces.length;i++){
+        var ep=eyepieces[i];
+        var fl=Number(ep.focal)||0; if(fl<=0) continue;
+        var tfov=tfovDegrees(scope, ep) || 0;
+        var exitPupil=fl/scope.f_ratio;
+        var dist=0;
+        if(exitPupil<epMin) dist += (epMin-exitPupil)*100;
+        if(exitPupil>epMax) dist += (exitPupil-epMax)*50;
+        if(targetTfovDeg!=null){
+          if(tfov < targetTfovDeg){ dist += (targetTfovDeg - tfov)*500; }
+          else dist += (tfov - targetTfovDeg)*50;
+        }else{
+          var center=(eflMin+eflMax)/2;
+          var d=(fl<center)?(center-fl):(fl-center);
+          if(fl<eflMin) d += (eflMin-fl);
+          if(fl>eflMax) d += (fl-eflMax);
+          dist += d*10;
+        }
+        if(ep.afov && ep.afov>=68) dist -= 5;
+        if(dist<score){score=dist;best=ep;}
+      }
+      return best?best.id:null;
+    }
+    function recommendFilterKey(type, commonName, nom){
+      var t=(type||"").toLowerCase();
+      var name=(commonName||"").toLowerCase()+" "+(nom||"").toLowerCase();
+      var comp=name.replace(/\s+/g,'');
+      if(comp.indexOf("horse")>=0 || comp.indexOf("ic434")>=0 || comp.indexOf("b33")>=0) return "hbeta";
+      if(t.indexOf("galax")>=0) return null;
+      if(t.indexOf("amas ouvert")>=0 || t.indexOf("open")>=0) return null;
+      if(t.indexOf("réflex")>=0 || t.indexof==="reflection") return null;
+      if(t.indexOf("planét")>=0 || t.indexOf("planetary")>=0) return "oiii";
+      if(t.indexOf("snr")>=0 || t.indexOf("rémanent")>=0 || t.indexOf("remanent")>=0) return "oiii";
+      if(t.indexOf("h ii")>=0 || t.indexOf("émission")>=0 || (t.indexOf("nébuleuse")>=0 && t.indexOf("planét")<0) || t.indexOf("neb")>=0) return "uhc";
+      return null;
+    }
+
+    /* ==============================
+       UI helpers (Tag, Tooltip, Modal, AutoComplete)
+    ============================== */
+    function Tag(props){ return <span className="inline-block text-xs px-2 py-1 rounded bg-gray-800 border border-gray-700">{props.children}</span>; }
+
+    function Tip(props){
+      return (
+        <span className="relative inline-block group">
+          {props.children}
+          <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block bg-gray-800 text-gray-100 text-xs rounded px-2 py-1 border border-gray-700 whitespace-nowrap shadow z-50">
+            {props.text}
+          </span>
+        </span>
+      );
+    }
+
+    function AutoComplete(props){
+      var value=props.value, setValue=props.setValue, placeholder=props.placeholder, fetcher=props.fetcher, onPick=props.onPick;
+      var _s1=useState(value||""), q=_s1[0], setQ=_s1[1];
+      var _s2=useState([]), items=_s2[0], setItems=_s2[1];
+      var _s3=useState(false), open=_s3[0], setOpen=_s3[1];
+      var _s4=useState(false), loading=_s4[0], setLoading=_s4[1];
+
+      useEffect(function(){ setQ(value||""); },[value]);
+
+      async function change(v){
+        setQ(v); if(setValue) setValue(v);
+        if(v && v.length>=1){
+          setLoading(true);
+          var res = await fetcher(v);
+          setItems(res||[]);
+          setLoading(false); setOpen(true);
+        }else{ setItems([]); setOpen(false); }
+      }
+      async function pick(it){
+        var label=(typeof it==="string")?it:it.label;
+        setQ(label); if(setValue) setValue((it&&it.nom)?(it.nom+(it.commonName?(" — "+it.commonName):"")):label);
+        if(onPick) await onPick(it);
+        setOpen(false);
+      }
+
+      return (
+        <div className="relative">
+          <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                 placeholder={placeholder} value={q}
+                 onChange={function(e){ change(e.target.value); }} onFocus={function(){ if(q) setOpen(true); }} />
+          {loading ? <div className="absolute right-3 top-2.5 text-sm opacity-70">…</div> : null}
+          {open && items && items.length ? (
+            <div className="absolute mt-1 w-full max-h-60 overflow-auto rounded-md border border-gray-700 bg-gray-900 shadow-lg z-10">
+              {items.map(function(it,i){
                 return (
-                  <label key={ep.id} className="flex items-center gap-2 p-2 rounded border border-gray-800 bg-gray-900">
-                    <input type="checkbox" checked={!!checked} onChange={function(){toggleEp(ep.id);}}/>
-                    <span className="text-sm">
-                      {ep.name} — {(ep.focal!=null?ep.focal:"?")} mm{ep.afov?(" • "+ep.afov+"°"):""}<span className="opacity-80">{hintForEp(ep)}</span>
-                    </span>
-                  </label>
+                  <button key={i} type="button" onClick={function(){ pick(it); }}
+                          className="w-full text-left px-3 py-2 hover:bg-gray-800">
+                    {(typeof it==="string")?it:it.label}
+                  </button>
                 );
               })}
             </div>
-          )}
-          <div className="text-xs opacity-70 mt-1">Le marquage « conseillé », « conseillé avec filtre » ou « avec ou sans filtre » est recalculé selon l’objet et ton instrument.</div>
+          ):null}
         </div>
-
-        <div>
-          <label className="block text-sm mb-1">Note</label>
-          <textarea value={draft.note||""} onChange={function(e){ setDraft(assign(draft,{note:e.target.value})); }} rows="3" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"></textarea>
-        </div>
-      </div>
-    );
-  }
-
-  /* ---------- Paramètres ---------- */
-  function SettingsModal(props){
-    var open=props.open, onClose=props.onClose, settings=props.settings, onSave=props.onSave;
-    var _t=useState(settings.telescopes.slice()), telescopes=_t[0], setTelescopes=_t[1];
-    var _e=useState(settings.eyepieces.slice()), eyepieces=_e[0], setEyepieces=_e[1];
-    var _c=useState(settings.displayConstellation||'latin'), constLang=_c[0], setConstLang=_c[1];
-
-    function addTelescope(){ setTelescopes(telescopes.concat([{id:uid(), name:"", diameter:"", focal:""}])); }
-    function delTelescope(id){ setTelescopes(telescopes.filter(function(t){return t.id!==id;})); }
-    function updateTelescope(id, patch){ setTelescopes(telescopes.map(function(t){ return t.id===id?assign(t,patch):t; })); }
-
-    function addEyepiece(){ setEyepieces(eyepieces.concat([{id:uid(), name:"", focal:"", afov:""}])); }
-    function delEyepiece(id){ setEyepieces(eyepieces.filter(function(e){return e.id!==id;})); }
-    function updateEyepiece(id, patch){ setEyepieces(eyepieces.map(function(e){ return e.id===id?assign(e,patch):e; })); }
-
-    function save(){
-      var cleanT = telescopes.map(function(t){ return { id:t.id, name:String(t.name||"").trim(), diameter: t.diameter?Number(t.diameter):null, focal: t.focal?Number(t.focal):null }; }).filter(function(t){ return t.name; });
-      var cleanE = eyepieces.map(function(e){ return { id:e.id, name:String(e.name||"").trim(), focal: e.focal?Number(e.focal):null, afov: e.afov?Number(e.afov):null }; }).filter(function(e){ return e.name && e.focal; });
-      onSave({ telescopes: cleanT, eyepieces: cleanE, displayConstellation: constLang });
-      onClose();
+      );
     }
 
-    return (
-      <Modal open={open} title="Paramètres" onClose={onClose} onSubmit={save} submitLabel="Enregistrer">
-        <section className="space-y-2">
-          <h4 className="font-semibold">Affichage</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm mb-1">Noms des constellations</label>
-              <select value={constLang} onChange={function(e){setConstLang(e.target.value);}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2">
-                <option value="latin">Latin</option>
-                <option value="fr">Français</option>
-              </select>
-              <p className="text-xs opacity-70 mt-1">S’applique immédiatement (liste + PDF).</p>
+    function Modal(props){
+      var open=props.open, title=props.title, children=props.children, onClose=props.onClose, onSubmit=props.onSubmit, submitLabel=props.submitLabel;
+      useEffect(function(){ document.body.classList.toggle("modal-open", open); return function(){ document.body.classList.remove("modal-open"); }; },[open]);
+      if(!open) return null;
+      return (
+        <div className="fixed inset-0 z-50 grid place-items-center">
+          <div className="absolute inset-0 bg-black/60" onClick={onClose}></div>
+          <div className="relative w-full max-w-3xl rounded-xl bg-gray-900 border border-gray-800 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">{title}</h3>
+              <button onClick={onClose} className="p-2 rounded hover:bg-gray-800">✕</button>
+            </div>
+            <div className="space-y-4">{children}</div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={onClose} className="px-4 py-2 rounded border border-gray-700 hover:bg-gray-800">Fermer</button>
+              {onSubmit ? <button onClick={onSubmit} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700">{submitLabel||"Enregistrer"}</button> : null}
             </div>
           </div>
-        </section>
-
-        <div className="h-px bg-gray-800 my-4"></div>
-
-        <section>
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-semibold">Télescopes</h4>
-            <button onClick={addTelescope} className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-700">+ Ajouter</button>
-          </div>
-          <div className="space-y-2">
-            {telescopes.length===0 ? <div className="text-sm opacity-70">Aucun télescope enregistré.</div> : null}
-            {telescopes.map(function(t){
-              return (
-                <div key={t.id} className="grid grid-cols-1 md:grid-cols-7 gap-2 p-3 rounded border border-gray-800 bg-gray-900">
-                  <div className="md:col-span-3">
-                    <label className="text-xs opacity-70">Nom</label>
-                    <input value={t.name||""} onChange={function(e){updateTelescope(t.id,{name:e.target.value});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-                  </div>
-                  <div>
-                    <label className="text-xs opacity-70">Diamètre (mm)</label>
-                    <input type="number" min="20" step="1" value={(t.diameter!=null?t.diameter:"")} onChange={function(e){updateTelescope(t.id,{diameter:e.target.value?Number(e.target.value):null});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-                  </div>
-                  <div>
-                    <label className="text-xs opacity-70">Focale (mm)</label>
-                    <input type="number" min="100" step="1" value={(t.focal!=null?t.focal:"")} onChange={function(e){updateTelescope(t.id,{focal:e.target.value?Number(e.target.value):null});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-                  </div>
-                  <div className="md:col-span-2 flex items-end">
-                    <button onClick={function(){delTelescope(t.id);}} className="px-3 py-2 rounded border border-red-600 text-red-400 hover:bg-red-600/10 w-full">Supprimer</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="mt-8">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-semibold">Oculaires</h4>
-            <button onClick={addEyepiece} className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-700">+ Ajouter</button>
-          </div>
-          <div className="space-y-2">
-            {eyepieces.length===0 ? <div className="text-sm opacity-70">Aucun oculaire.</div> : null}
-            {eyepieces.map(function(ep){
-              return (
-                <div key={ep.id} className="grid grid-cols-1 md:grid-cols-8 gap-2 p-3 rounded border border-gray-800 bg-gray-900">
-                  <div className="md:col-span-4">
-                    <label className="text-xs opacity-70">Nom</label>
-                    <input value={ep.name||""} onChange={function(e){updateEyepiece(ep.id,{name:e.target.value});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-                  </div>
-                  <div>
-                    <label className="text-xs opacity-70">Focale (mm)</label>
-                    <input type="number" min="1" step="0.5" value={(ep.focal!=null?ep.focal:"")} onChange={function(e){updateEyepiece(ep.id,{focal:e.target.value?Number(e.target.value):null});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-                  </div>
-                  <div>
-                    <label className="text-xs opacity-70">Champ (°)</label>
-                    <input type="number" min="30" step="1" value={(ep.afov!=null?ep.afov:"")} onChange={function(e){updateEyepiece(ep.id,{afov:e.target.value?Number(e.target.value):null});}} className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2"/>
-                  </div>
-                  <div className="md:col-span-2 flex items-end">
-                    <button onClick={function(){delEyepiece(ep.id);}} className="px-3 py-2 rounded border border-red-600 text-red-400 hover:bg-red-600/10 w-full">Supprimer</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      </Modal>
-    );
-  }
-
-  /* ---------- Thumbnails ---------- */
-  function wikiSearchURL(q, lang){
-    var base="https://"+lang+".wikipedia.org/w/api.php";
-    var params=["action=query","format=json","origin=*","prop=pageimages|pageprops","piprop=thumbnail","pithumbsize=160","pilicense=any","generator=search","gsrlimit=1","gsrsearch="+encodeURIComponent(q)].join("&");
-    return base+"?"+params;
-  }
-  async function wikiThumbSearch(q){
-    var langs=["en","fr"];
-    for(var i=0;i<langs.length;i++){
-      try{
-        var r=await fetch(wikiSearchURL(q,langs[i])); if(!r.ok) continue;
-        var j=await r.json(); var pages=j && j.query && j.query.pages; if(!pages) continue;
-        var k=Object.keys(pages)[0]; var p=pages[k];
-        if(p && p.thumbnail && p.thumbnail.source) return p.thumbnail.source;
-      }catch(_){}
+        </div>
+      );
     }
-    return null;
-  }
-  function isMessierLabel(s){ return /^M\s*\d+$/i.test(String(s||"").trim()); }
-  function messierToPhrase(s){ var m=String(s).trim().match(/^M\s*(\d+)$/i); return m?("Messier "+m[1]):s; }
-  async function findThumbnailForObject(obj){
-    var qs=[];
-    if(obj && obj.nom){ var nn=String(obj.nom).trim(); if(isMessierLabel(nn)) qs.push(messierToPhrase(nn)); qs.push(nn); }
-    if(obj && obj.commonName) qs.push(String(obj.commonName).trim());
-    for(var i=0;i<qs.length;i++){ var u=await wikiThumbSearch(qs[i]); if(u) return u; }
-    return null;
-  }
-  function Thumbnail(props){
-    var obj=props.obj, thumbs=props.thumbs, remember=props.remember;
-    var key = normalizeName(obj && obj.nom ? obj.nom : "");
-    var url = (thumbs && key && thumbs[key]) ? thumbs[key] : null;
-    var _s=useState(url), src=_s[0], setSrc=_s[1];
-    useEffect(function(){
-      var active=true;
-      (async function(){
-        if(src || !obj || !obj.nom) return;
-        var u=await findThumbnailForObject(obj);
-        if(active && u){ setSrc(u); if(remember) remember(key,u); }
-      })();
-      return function(){ active=false; };
-    }, [obj && obj.nom]);
-    if(!src) return null;
-    return <img src={src} alt={obj.nom} className="h-16 w-16 rounded-md object-cover flex-shrink-0 border border-gray-800" onError={function(e){e.currentTarget.style.display='none';}}/>;
-  }
 
-  /* ---------- App ---------- */
-  function App(){
-    var _n=useState(function(){ try{return JSON.parse(localStorage.getItem('ccop:nights')||'[]');}catch(_){return[];} }), nights=_n[0], setNights=_n[1];
-    var _sid=useState((nights[0]&&nights[0].id)||null), selectedId=_sid[0], setSelectedId=_sid[1];
+    /* ==============================
+       Paramètres (télescopes / oculaires) — ENREGISTREMENT AUTOMATIQUE
+    ============================== */
+    function SettingsModal(props){
+      var open=props.open, onClose=props.onClose, settings=props.settings, onSave=props.onSave;
+      var _t=useState(settings.telescopes.slice()), telescopes=_t[0], setTelescopes=_t[1];
+      var _e=useState(settings.eyepieces.slice()), eyepieces=_e[0], setEyepieces=_e[1];
 
-    var _st=useState(function(){ try{
-      var s=JSON.parse(localStorage.getItem('ccop:settings')||'{"telescopes":[],"eyepieces":[],"displayConstellation":"latin"}');
-      if(!s.telescopes) s.telescopes=[]; if(!s.eyepieces) s.eyepieces=[]; if(!s.displayConstellation) s.displayConstellation='latin'; return s;
-    }catch(_){ return { telescopes:[], eyepieces:[], displayConstellation:'latin' }; }}), settings=_st[0], setSettings=_st[1];
+      useEffect(function(){ setTelescopes(settings.telescopes.slice()); setEyepieces(settings.eyepieces.slice()); }, [open]);
 
-    useEffect(function(){ localStorage.setItem('ccop:settings', JSON.stringify(settings)); },[settings]);
-    useEffect(function(){ localStorage.setItem('ccop:nights', JSON.stringify(nights)); },[nights]);
-
-    var _th=useState(function(){ try{return JSON.parse(localStorage.getItem('ccop:thumbs')||'{}');}catch(_){return{};} }), thumbs=_th[0], setThumbs=_th[1];
-    function rememberThumb(k,u){ setThumbs(function(prev){ var n=shallowCopy(prev); n[k]=u; try{localStorage.setItem('ccop:thumbs', JSON.stringify(n));}catch(_){ } return n; }); }
-
-    var _nm=useState(false), nightModalOpen=_nm[0], setNightModalOpen=_nm[1];
-    var _nd=useState(initialNight()), nightDraft=_nd[0], setNightDraft=_nd[1];
-
-    var _om=useState(false), objectModalOpen=_om[0], setObjectModalOpen=_om[1];
-    var _od=useState({}), objectDraft=_od[0], setObjectDraft=_od[1];
-    var _oe=useState({}), objectErrors=_oe[0], setObjectErrors=_oe[1];
-
-    var _set=useState(false), settingsOpen=_set[0], setSettingsOpen=_set[1];
-
-    var selectedNight=useMemo(function(){ return (nights||[]).find(function(n){return n.id===selectedId;})||null; }, [nights,selectedId]);
-    var _col=useState({}), collapsed=_col[0], setCollapsed=_col[1];
-    useEffect(function(){ setCollapsed({}); },[selectedId]);
-
-    function groupedObjects(){
-      var objs=(selectedNight&&selectedNight.objects)?selectedNight.objects.slice():[];
-      var groups={}; var lang=settings.displayConstellation||'latin';
-      for(var i=0;i<objs.length;i++){
-        var o=objs[i];
-        var abbr = o.constellationAbbr || constAbbrFromField(o.constellation||"") || "";
-        var name = abbr ? displayConstellation(abbr, lang) : (o.constellation||"Constellation inconnue");
-        if(!groups[name]) groups[name]=[];
-        groups[name].push(o);
+      function sortEyepieces(list){
+        var copy=list.slice();
+        copy.sort(function(a,b){
+          var fa=(a.focal!=null)?a.focal:1e9, fb=(b.focal!=null)?b.focal:1e9;
+          if(fa===fb) return (a.name||"").localeCompare(b.name||"");
+          return fa-fb;
+        });
+        return copy;
       }
-      var keys=Object.keys(groups).sort(function(a,b){ return a.localeCompare(b,'fr'); });
-      for(var i2=0;i2<keys.length;i2++){ var k=keys[i2]; groups[k].sort(function(a,b){ return (a.nom||"").localeCompare((b.nom||""),'fr'); }); }
-      return {keys:keys, groups:groups};
+      function normalizeAndSave(Traw, Eraw){
+        var T = (Traw||[]).map(function(t){ return {id:t.id||(uid()), name:String(t.name||"").trim(), diameter:t.diameter!=null?Number(t.diameter):null, focal:t.focal!=null?Number(t.focal):null}; })
+                           .filter(function(t){ return t.name; });
+        var E = (Eraw||[]).map(function(e){ return {id:e.id||(uid()), name:String(e.name||"").trim(), focal:e.focal!=null?Number(e.focal):null, afov:e.afov!=null?Number(e.afov):null}; })
+                           .filter(function(e){ return e.name && e.focal; });
+        var S = { telescopes:T, eyepieces:sortEyepieces(E) };
+        onSave(S); // enregistre immédiatement (persisté par useEffect côté App)
+      }
+
+      function addT(){ var nx = telescopes.concat([{id:uid(),name:"",diameter:null,focal:null}]); setTelescopes(nx); normalizeAndSave(nx, eyepieces); }
+      function delT(id){ var nx = telescopes.filter(function(t){ return t.id!==id; }); setTelescopes(nx); normalizeAndSave(nx, eyepieces); }
+      function updT(id,p){ var nx = telescopes.map(function(t){ return t.id===id?Object.assign({},t,p):t; }); setTelescopes(nx); normalizeAndSave(nx, eyepieces); }
+
+      function addE(){ var nx = eyepieces.concat([{id:uid(),name:"",focal:null,afov:null}]); setEyepieces(nx); normalizeAndSave(telescopes, nx); }
+      function delE(id){ var nx = eyepieces.filter(function(e){ return e.id!==id; }); setEyepieces(nx); normalizeAndSave(telescopes, nx); }
+      function updE(id,p){ var nx = eyepieces.map(function(e){ return e.id===id?Object.assign({},e,p):e; }); setEyepieces(nx); normalizeAndSave(telescopes, nx); }
+
+      function closeAndKeep(){ onClose(); } // auto-save déjà fait
+
+      var sortedE = (function(list){ return list.slice().sort(function(a,b){ var fa=(a.focal!=null)?a.focal:1e9, fb=(b.focal!=null)?b.focal:1e9; return fa-fb; }); })(eyepieces);
+
+      return (
+        <Modal open={open} onClose={closeAndKeep} onSubmit={closeAndKeep} title="Paramètres — Télescopes & Oculaires" submitLabel="Sauvegarder">
+          <div className="text-xs opacity-70 -mt-2 mb-2">Les modifications sont <b>enregistrées automatiquement</b>.</div>
+          <div className="space-y-8">
+            <section>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-semibold">Télescopes</h4>
+                <button className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-700" onClick={addT}>+ Ajouter</button>
+              </div>
+              <div className="space-y-2">
+                {telescopes.map(function(t,idx){
+                  return (
+                    <div key={t.id||idx} className="grid grid-cols-1 md:grid-cols-7 gap-2 p-3 rounded border border-gray-800 bg-gray-900">
+                      <div className="md:col-span-3">
+                        <label className="text-xs opacity-70">Nom</label>
+                        <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={t.name} onChange={function(e){ updT(t.id,{name:e.target.value}); }}/>
+                      </div>
+                      <div>
+                        <label className="text-xs opacity-70">Diamètre (mm)</label>
+                        <input type="number" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={(t.diameter!=null?t.diameter:"")} onChange={function(e){ updT(t.id,{diameter:e.target.value?Number(e.target.value):null}); }}/>
+                      </div>
+                      <div>
+                        <label className="text-xs opacity-70">Focale (mm)</label>
+                        <input type="number" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={(t.focal!=null?t.focal:"")} onChange={function(e){ updT(t.id,{focal:e.target.value?Number(e.target.value):null}); }}/>
+                      </div>
+                      <div className="md:col-span-2 flex items-end">
+                        <button className="px-3 py-2 rounded border border-red-600 text-red-400 hover:bg-red-600/10 w-full" onClick={function(){ delT(t.id); }}>Supprimer</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-semibold">Oculaires (triés par focale)</h4>
+                <button className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-700" onClick={addE}>+ Ajouter</button>
+              </div>
+              <div className="space-y-2">
+                {sortedE.map(function(ep,idx){
+                  return (
+                    <div key={ep.id||idx} className="grid grid-cols-1 md:grid-cols-8 gap-2 p-3 rounded border border-gray-800 bg-gray-900">
+                      <div className="md:col-span-4">
+                        <label className="text-xs opacity-70">Nom</label>
+                        <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={ep.name} onChange={function(e){ updE(ep.id,{name:e.target.value}); }}/>
+                      </div>
+                      <div>
+                        <label className="text-xs opacity-70">Focale (mm)</label>
+                        <input type="number" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={(ep.focal!=null?ep.focal:"")} onChange={function(e){ updE(ep.id,{focal:e.target.value?Number(e.target.value):null}); }}/>
+                      </div>
+                      <div>
+                        <label className="text-xs opacity-70">Champ (°)</label>
+                        <input type="number" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={(ep.afov!=null?ep.afov:"")} onChange={function(e){ updE(ep.id,{afov:e.target.value?Number(e.target.value):null}); }}/>
+                      </div>
+                      <div className="md:col-span-2 flex items-end">
+                        <button className="px-3 py-2 rounded border border-red-600 text-red-400 hover:bg-red-600/10 w-full" onClick={function(){ delE(ep.id); }}>Supprimer</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+        </Modal>
+      );
     }
 
-    var nightScope = useMemo(function(){ if(!selectedNight) return null; return buildScope(selectedNight.diameter, selectedNight.focal); }, [selectedNight && selectedNight.diameter, selectedNight && selectedNight.focal, selectedNight && selectedNight.id]);
+    /* ==============================
+       Sauvegardes (Export / Import)
+    ============================== */
+    function ExportModal(props){
+      var open=props.open, onClose=props.onClose, nights=props.nights, settings=props.settings;
+      var payload = useMemo(function(){
+        var obj={ version:1, createdAt:new Date().toISOString(), nights:nights||[], settings:settings||{telescopes:[],eyepieces:[]} };
+        return JSON.stringify(obj);
+      }, [JSON.stringify(nights||[]), JSON.stringify(settings||{})]);
+      var b64 = useMemo(function(){ return toBase64Utf8(payload); }, [payload]);
+      var _c=useState(false), copied=_c[0], setCopied=_c[1];
 
-    async function geocodeIfNeeded(n){
-      if((n.lat!=null && n.lon!=null) || !n.location) return n;
-      try{
-        var r=await fetch("https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(n.location)+"&count=1&language=fr&format=json");
-        if(r.ok){ var j=await r.json(); var res=j&&j.results&&j.results[0]; if(res){ return assign(n,{ lat:res.latitude, lon:res.longitude }); } }
-      }catch(_){}
-      return n;
-    }
-
-    function openCreateNight(){ setNightDraft(initialNight()); setNightModalOpen(true); }
-    function openEditNight(n){ setNightDraft(shallowCopy(n)); setNightModalOpen(true); }
-    async function saveNight(){
-      var draft=await geocodeIfNeeded(nightDraft);
-      setNights(function(prev){
-        var exists=prev.some(function(n){return n.id===draft.id;});
-        if(exists) return prev.map(function(n){return n.id===draft.id?shallowCopy(draft):n;});
-        var next=prev.concat([shallowCopy(draft)]); if(!selectedId) setSelectedId(draft.id); return next;
-      });
-      setNightModalOpen(false);
-    }
-    function removeNight(id){ setNights(function(prev){ return prev.filter(function(n){ return n.id!==id; }); }); if(selectedId===id) setSelectedId(null); }
-
-    function openCreateObject(){ setObjectDraft({ id:uid(), nom:"", constellationAbbr:"", type:"", raHours:null, decDeg:null, pageAtlas:"", epIds:[], note:"", commonName:"", distanceLy:null }); setObjectErrors({}); setObjectModalOpen(true); }
-    function openEditObject(obj){ var cp=shallowCopy(obj); cp.epIds=Array.isArray(obj.epIds)?obj.epIds.slice():[]; setObjectDraft(cp); setObjectErrors({}); setObjectModalOpen(true); }
-    function validateObject(d){ var errs={}; if(!String(d.nom||"").trim()) errs.nom="Le nom de l'objet est obligatoire."; if(!String(d.constellationAbbr||"").trim()) errs.constellation="Constellation manquante (provenant de l’API)."; return errs; }
-    function isDuplicateName(night,d){ var target=normalizeName(d.nom); return (night.objects||[]).some(function(o){ return o.id!==d.id && normalizeName(o.nom)===target; }); }
-
-    async function saveObject(){
-      if(!selectedNight) return;
-      var draft = shallowCopy(objectDraft);
-
-      if(!draft.type || !draft.constellationAbbr || draft.raHours==null || draft.decDeg==null || !draft.commonName){
+      function copy(){
         try{
-          var extra=await enrichObjectFromAPI(draft.nom);
-          if(!draft.type) draft.type=extra.type;
-          if(!draft.constellationAbbr) draft.constellationAbbr=extra.constellationAbbr;
-          if(draft.raHours==null) draft.raHours=extra.raHours;
-          if(draft.decDeg==null) draft.decDeg=extra.decDeg;
-          if(!draft.commonName) draft.commonName=extra.commonName;
-          if(draft.distanceLy==null) draft.distanceLy=extra.distanceLy;
-        }catch(_){}
-      }
-
-      var errs=validateObject(draft); if(Object.keys(errs).length){ setObjectErrors(errs); return; }
-      if(isDuplicateName(selectedNight,draft)){ setObjectErrors({nom:"Cet objet existe déjà dans cette nuit."}); return; }
-
-      setNights(function(prev){
-        return prev.map(function(n){
-          if(n.id!==selectedNight.id) return n;
-          var has=(n.objects||[]).some(function(o){ return o.id===draft.id; });
-          return assign(n,{ objects: has ? n.objects.map(function(o){ return o.id===draft.id?shallowCopy(draft):o; }) : (n.objects||[]).concat([shallowCopy(draft)]) });
-        });
-      });
-      setObjectModalOpen(false);
-    }
-    function removeObject(objId){
-      if(!selectedNight) return;
-      setNights(function(prev){
-        return prev.map(function(n){
-          if(n.id!==selectedNight.id) return n;
-          return assign(n,{ objects:(n.objects||[]).filter(function(o){ return o.id!==objId; }) });
-        });
-      });
-    }
-
-    function exportPDF(){
-      if(!selectedNight) return;
-      var lang=settings.displayConstellation||'latin';
-      var groups={}; var objs=(selectedNight.objects||[]);
-      for(var i=0;i<objs.length;i++){
-        var o=objs[i];
-        var name = o.constellationAbbr ? displayConstellation(o.constellationAbbr, lang) : "Constellation inconnue";
-        if(!groups[name]) groups[name]=[];
-        groups[name].push(o);
-      }
-      var keys=Object.keys(groups).sort(function(a,b){ return a.localeCompare(b,'fr'); });
-      for(var j=0;j<keys.length;j++){ var k=keys[j]; groups[k].sort(function(a,b){ return (a.nom||"").localeCompare((b.nom||""),'fr'); }); }
-
-      var info=selectedNight;
-      var parts=[];
-      parts.push('<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CCOP — Export PDF</title>');
-      parts.push('<style>:root{--bg:#fff;--fg:#111;--muted:#444;--line:#e5e7eb}html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Inter,Helvetica Neue,Arial,Ubuntu;-webkit-print-color-adjust:exact;print-color-adjust:exact}.page{max-width:900px;margin:0 auto;padding:28px 22px}h1{font-size:28px;margin:0 0 8px 0}.meta{color:var(--muted);font-size:14px;margin-bottom:22px}h2.group{font-size:22px;margin:22px 0 10px 0;border-bottom:1px solid var(--line);padding-bottom:6px}.obj{padding:10px 0;border-bottom:1px dotted var(--line)}.obj:last-child{border-bottom:0}.objname{font-weight:700;font-size:16px;margin-bottom:2px}.row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted)}@page{size:A4;margin:14mm}</style></head><body><div class="page">');
-      parts.push('<h1>Crazy Cloud — Liste d\'observation</h1>');
-      var meta=[]; if(info.location) meta.push(info.location); if(info.date) meta.push(info.date); if(info.time) meta.push(info.time); if(info.bortle!=null) meta.push("Bortle "+info.bortle); if(info.telescope) meta.push(info.telescope);
-      var scope=buildScope(info.diameter, info.focal); if(scope) meta.push(Math.round(scope.aperture_mm)+"/"+Math.round(scope.focal_mm)+" mm (f/"+scope.f_ratio.toFixed(1)+")");
-      parts.push('<div class="meta">'+meta.join(' • ')+'</div>');
-
-      for(var j2=0;j2<keys.length;j2++){
-        var k=keys[j2]; parts.push('<h2 class="group">'+k.replace(/</g,"&lt;")+'</h2>');
-        var arr=groups[k];
-        for(var i2=0;i2<arr.length;i2++){
-          var o=arr[i2];
-          var line=(o.nom||"").replace(/</g,"&lt;");
-          if(o.type) line+=' — '+String(o.type).replace(/</g,"&lt;");
-          if(o.commonName) line+=' — '+String(o.commonName).replace(/</g,"&lt;");
-          parts.push('<div class="obj"><div class="objname">'+line+'</div>');
-          var cols=[];
-          if(o.raHours!=null) cols.push('<div><strong>AD:</strong> '+hmsFromHours(o.raHours)+' ('+Number(o.raHours).toFixed(2)+'h)</div>');
-          if(o.decDeg!=null) cols.push('<div><strong>Déc:</strong> '+Number(o.decDeg).toFixed(2)+'°</div>');
-          if(o.pageAtlas) cols.push('<div><strong>Atlas:</strong> '+String(o.pageAtlas).replace(/</g,"&lt;")+'</div>');
-          if(o.distanceLy!=null) cols.push('<div><strong>Distance:</strong> '+Math.round(o.distanceLy)+' a.l.</div>');
-          parts.push('<div class="row">'+cols.join(' ')+'</div>');
-          if(o.note){ parts.push('<div class="row" style="margin-top:6px"><div><strong>Note:</strong> '+String(o.note).replace(/</g,"&lt;")+'</div></div>'); }
-          parts.push('</div>');
+          if(navigator && navigator.clipboard && navigator.clipboard.writeText){
+            navigator.clipboard.writeText(b64);
+            setCopied(true);
+            setTimeout(function(){ setCopied(false); }, 1500);
+          }else{
+            alert("Sélectionnez la chaîne et copiez-la (Ctrl/Cmd+C).");
+          }
+        }catch(_){
+          alert("Impossible de copier automatiquement — copiez la chaîne à la main.");
         }
       }
 
-      parts.push('</div><script>window.focus();setTimeout(function(){try{window.print();}catch(e){}},250);<\/script></body></html>');
-      var w=window.open("", "_blank"); if(!w){ alert("Popup bloquée : autorisez les popups et réessayez."); return; }
-      w.document.open(); w.document.write(parts.join('')); w.document.close();
+      return (
+        <Modal open={open} onClose={onClose} title="Exporter les données (Base64)">
+          <p className="text-sm opacity-80">Copiez cette chaîne et collez-la dans un autre navigateur via “Importer” pour restaurer vos nuits et réglages.</p>
+          <textarea className="w-full h-48 rounded-md border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-xs" readOnly value={b64}></textarea>
+          <div className="flex items-center justify-between text-sm">
+            <div className="opacity-70">Taille : {b64.length} caractères</div>
+            <button onClick={copy} className={"px-3 py-2 rounded-md "+(copied?"bg-green-600":"bg-blue-600 hover:bg-blue-700")}>
+              {copied ? "Copié ✓" : "Copier"}
+            </button>
+          </div>
+        </Modal>
+      );
     }
 
-    function toggleGroup(key){ setCollapsed(function(c){ var n=shallowCopy(c); n[key]=!c[key]; return n; }); }
+    function ImportModal(props){
+      var open=props.open, onClose=props.onClose, onImport=props.onImport;
+      var _v=useState(""), value=_v[0], setValue=_v[1];
 
-    var grouped = groupedObjects(); var groupKeys=grouped.keys; var groups=grouped.groups;
-    var upcoming=(nights||[]).filter(function(n){return !isPastNight(n);}).sort(function(a,b){ var da=parseNightDateTime(a), db=parseNightDateTime(b); return (da?da.getTime():Infinity)-(db?db.getTime():Infinity); });
-    var past=(nights||[]).filter(function(n){return isPastNight(n);}).sort(function(a,b){ var da=parseNightDateTime(a), db=parseNightDateTime(b); return (db?db.getTime():0)-(da?da.getTime():0); });
+      var preview = useMemo(function(){
+        if(!value) return { ok:false, err:null };
+        try{
+          var jsonStr = fromBase64Utf8(value.trim());
+          var obj = JSON.parse(jsonStr);
+          var nights = Array.isArray(obj.nights)?obj.nights:[];
+          var settings = obj.settings && typeof obj.settings==="object" ? obj.settings : {telescopes:[],eyepieces:[]};
+          var tCount = Array.isArray(settings.telescopes)?settings.telescopes.length:0;
+          var eCount = Array.isArray(settings.eyepieces)?settings.eyepieces.length:0;
+          return { ok:true, obj:obj, nights:nights.length, tel:tCount, ep:eCount };
+        }catch(e){
+          return { ok:false, err:String(e) };
+        }
+      }, [value]);
 
-    return (
-      <div className="flex h-screen">
-        {/* Sidebar */}
-        <aside className="w-80 shrink-0 border-r border-gray-800 bg-gray-900/80 backdrop-blur">
-          <div className="p-4 flex items-center justify-between gap-3 border-b border-gray-800">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-gray-800 grid place-items-center">🌘</div>
-              <div><div className="font-semibold leading-tight">Crazy Cloud</div><div className="text-sm opacity-70">Observation Planner</div></div>
-            </div>
-            <button title="Paramètres" onClick={function(){setSettingsOpen(true);}} className="p-2 rounded-md border border-gray-700 hover:bg-gray-800">⚙️</button>
+      function doImport(){
+        if(!preview.ok){ alert("Chaîne invalide."); return; }
+        if(!confirm("Confirmer l’import ? Cela REMPLACE toutes vos données locales.")) return;
+        onImport(preview.obj);
+        onClose();
+        alert("Import terminé.");
+      }
+
+      return (
+        <Modal open={open} onClose={onClose} title="Importer des données (Base64)" onSubmit={doImport} submitLabel="Importer">
+          <p className="text-sm opacity-80">Collez une chaîne Base64 exportée depuis une autre instance. ⚠️ L’import remplace toutes les données locales.</p>
+          <textarea className="w-full h-48 rounded-md border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-xs" value={value} onChange={function(e){ setValue(e.target.value); }} placeholder="Collez ici la chaîne Base64…"></textarea>
+          <div className="text-sm">
+            {preview.ok
+              ? <div className="text-green-400">Aperçu : {preview.nights} nuit(s), {preview.tel} télescope(s), {preview.ep} oculaire(s).</div>
+              : (value? <div className="text-red-400">Chaîne invalide.</div> : <div className="opacity-60">En attente d’une chaîne…</div>)
+            }
           </div>
+        </Modal>
+      );
+    }
 
-          <div className="p-4 flex items-center justify-between">
-            <button onClick={openCreateNight} className="px-3 py-2 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700">+ Ajouter une nuit</button>
-          </div>
-
-          <div className="px-4 pb-4 overflow-y-auto h-[calc(100vh-140px)] space-y-6">
-            <div>
-              <div className="text-xs uppercase tracking-wide opacity-70 mb-2">À venir</div>
-              {upcoming.length===0 ? <div className="text-sm opacity-60">Aucune nuit planifiée.</div> :
-                <div className="space-y-2">
-                  {upcoming.map(function(n){
-                    return (
-                      <div key={n.id} className={"rounded-lg border "+(selectedId===n.id?"border-blue-500":"border-gray-800")+" bg-gray-900 shadow-sm"}>
-                        <button className="w-full text-left px-3 py-2" onClick={function(){setSelectedId(n.id);}}>
-                          <div className="font-medium">{n.location||"Lieu inconnu"}</div>
-                          <div className="text-sm opacity-70">{(n.date||"Date ?")} • {(n.time||"Heure ?")} • Bortle {(n.bortle!=null?n.bortle:"?")}</div>
-                        </button>
-                        <div className="flex gap-2 px-3 pb-3">
-                          <button onClick={function(){openEditNight(n);}} className="text-blue-400 hover:underline text-sm">Modifier</button>
-                          <button onClick={function(){removeNight(n.id);}} className="text-red-400 hover:underline text-sm">Supprimer</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>}
-            </div>
-
-            <div>
-              <div className="text-xs uppercase tracking-wide opacity-70 mb-2">Passées</div>
-              {past.length===0 ? <div className="text-sm opacity-60">Aucune nuit passée.</div> :
-                <div className="space-y-2">
-                  {past.map(function(n){
-                    return (
-                      <div key={n.id} className="rounded-lg border border-gray-800 bg-gray-900 shadow-sm opacity-60">
-                        <button className="w-full text-left px-3 py-2" onClick={function(){setSelectedId(n.id);}}>
-                          <div className="font-medium">{n.location||"Lieu inconnu"}</div>
-                          <div className="text-sm">{(n.date||"Date ?")} • {(n.time||"Heure ?")} • Bortle {(n.bortle!=null?n.bortle:"?")}</div>
-                        </button>
-                        <div className="flex gap-2 px-3 pb-3">
-                          <button onClick={function(){openEditNight(n);}} className="text-blue-400 hover:underline text-sm">Modifier</button>
-                          <button onClick={function(){removeNight(n.id);}} className="text-red-400 hover:underline text-sm">Supprimer</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>}
-            </div>
-          </div>
-        </aside>
-
-        {/* Main */}
-        <main className="flex-1 overflow-y-auto">
-          <div className="max-w-6xl mx-auto p-4 sm:p-6">
-            {!selectedNight ? (
-              <div className="text-center opacity-70">Sélectionnez une nuit dans la colonne de gauche.</div>
-            ) : (
+    /* ==============================
+       Formulaires (Nuit / Objet)
+    ============================== */
+    function NightForm(props){
+      var draft=props.draft, setDraft=props.setDraft, telescopes=props.telescopes;
+      function onPickTelescope(id){
+        var t=null;
+        for(var i=0;i<telescopes.length;i++){ if(telescopes[i].id===id){ t=telescopes[i]; break; } }
+        if(t){ setDraft(Object.assign({},draft,{telescopeId:t.id, telescope:t.name, diameter:t.diameter||null, focal:t.focal||null})); }
+        else { setDraft(Object.assign({},draft,{telescopeId:null})); }
+      }
+      return (
+        <div className="space-y-6">
+          {/* Bloc Infos de la nuit */}
+          <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
+            <div className="font-semibold mb-3">Informations de la nuit</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                {/* En-tête */}
-                <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 sm:p-5 mb-6">
-                  <div className="flex flex-wrap items-end justify-between gap-3">
-                    <h1 className="text-2xl md:text-3xl font-semibold">
-                      {selectedNight.location||("Nuit du "+(selectedNight.date||"—"))}
-                    </h1>
-                    <div className="text-sm opacity-70">Bortle {(selectedNight.bortle!=null?selectedNight.bortle:"—")}</div>
-                  </div>
-                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                    <div><div className="text-xs uppercase opacity-70">Date</div><div className="text-lg">{selectedNight.date||"—"}</div></div>
-                    <div><div className="text-xs uppercase opacity-70">Heure</div><div className="text-lg">{selectedNight.time||"—"}</div></div>
-                    <div><div className="text-xs uppercase opacity-70">Télescope</div><div className="text-lg">{selectedNight.telescope||"—"}</div></div>
-                    <div><div className="text-xs uppercase opacity-70">Diamètre / Focale</div><div className="text-lg">{(selectedNight.diameter&&selectedNight.focal)?(Math.round(selectedNight.diameter)+"/"+Math.round(selectedNight.focal)+" mm"):"—"}</div></div>
-                    <div><div className="text-xs uppercase opacity-70">Rapport f/D</div><div className="text-lg">{(nightScope)?("f/"+nightScope.f_ratio.toFixed(1)):"—"}</div></div>
-                    <div><div className="text-xs uppercase opacity-70">Coord. site</div><div className="text-lg">{(selectedNight.lat!=null&&selectedNight.lon!=null)? (fmt(selectedNight.lat,3)+"°, "+fmt(selectedNight.lon,3)+"°") : "—"}</div></div>
-                    <div className="lg:col-span-2"><div className="text-xs uppercase opacity-70">Météo</div><div className="text-lg">{selectedNight.meteo||"—"}</div></div>
-                  </div>
-                </div>
+                <label className="block text-sm mb-1">Date</label>
+                <input type="date" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.date} onChange={function(e){ setDraft(Object.assign({},draft,{date:e.target.value})); }}/>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Heure de début</label>
+                <input type="time" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.time} onChange={function(e){ setDraft(Object.assign({},draft,{time:e.target.value})); }}/>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm mb-1">Lieu</label>
+                <AutoComplete value={draft.location} setValue={function(v){ setDraft(Object.assign({},draft,{location:v})); }} placeholder="Ville, Pays" fetcher={searchCities}
+                  onPick={function(it){ setDraft(Object.assign({},draft,{ location:(it&&it.label)?it.label:draft.location, lat:(it&&it.lat!=null)?it.lat:null, lon:(it&&it.lon!=null)?it.lon:null })); }}/>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Bortle</label>
+                <select className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.bortle} onChange={function(e){ setDraft(Object.assign({},draft,{bortle:parseInt(e.target.value,10)})); }}>
+                  {[1,2,3,4,5,6,7,8,9].map(function(v){ return <option key={v} value={v}>Bortle {v}</option>; })}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm mb-1">Météo</label>
+                <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.meteo} onChange={function(e){ setDraft(Object.assign({},draft,{meteo:e.target.value})); }}/>
+              </div>
+            </div>
+          </div>
 
-                <section>
-                  <div className="flex items-center justify-between mb-3">
-                    <h2 className="font-medium">Objets à observer</h2>
-                    <div className="flex gap-2">
-                      <button onClick={exportPDF} className="px-3 py-2 text-sm rounded-md border border-gray-700 hover:bg-gray-800">Exporter en PDF</button>
-                      <button onClick={openCreateObject} className="px-3 py-2 text-sm rounded-md bg-green-600 text-white hover:bg-green-700">+ Ajouter un objet</button>
-                    </div>
-                  </div>
+          {/* Bloc Télescope */}
+          <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
+            <div className="font-semibold mb-3">Télescope</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm mb-1">Sélection</label>
+                <select className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.telescopeId||""} onChange={function(e){ onPickTelescope(e.target.value||null); }}>
+                  <option value="">— Aucun</option>
+                  {telescopes.map(function(t){ return <option key={t.id} value={t.id}>{t.name}</option>; })}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Nom affiché</label>
+                <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.telescope||""} onChange={function(e){ setDraft(Object.assign({},draft,{telescope:e.target.value})); }}/>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Diamètre (mm)</label>
+                <input type="number" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={(draft.diameter!=null?draft.diameter:"")} onChange={function(e){ setDraft(Object.assign({},draft,{diameter:e.target.value?Number(e.target.value):null})); }} placeholder="Ex: 400"/>
+              </div>
+              <div>
+                <label className="block text-sm mb-1">Focale (mm)</label>
+                <input type="number" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={(draft.focal!=null?draft.focal:"")} onChange={function(e){ setDraft(Object.assign({},draft,{focal:e.target.value?Number(e.target.value):null})); }} placeholder="Ex: 1800"/>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
 
-                  {groupKeys.length===0 ? (
-                    <div className="text-sm opacity-70">Aucun objet pour cette nuit.</div>
-                  ) : (
-                    <div className="space-y-6">
-                      {groupKeys.map(function(key){
-                        var isCollapsed=!!collapsed[key];
-                        return (
-                          <div key={key} className="w-full">
-                            <button onClick={function(){toggleGroup(key);}} className="w-full flex items-center justify-between py-2">
-                              <div className="text-2xl font-bold">{key}</div>
-                              <svg className={"h-5 w-5 transition-transform "+(isCollapsed?"-rotate-90":"")} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.25a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd"/></svg>
-                            </button>
+    function ObjectForm(props){
+      var draft=props.draft, setDraft=props.setDraft, errors=props.errors, nightScope=props.nightScope, eyepieces=props.eyepieces, openSettings=props.openSettings;
+      var errNom = errors && errors.nom;
+      var errCon = errors && errors.constellation;
 
-                            {!isCollapsed && (
-                              <div className="mt-2 space-y-3">
-                                {groups[key].map(function(obj){
-                                  return (
-                                    <div key={obj.id} className="w-full rounded-lg border border-gray-800 bg-gray-900 p-4">
-                                      <div className="flex items-start justify-between gap-2">
-                                        <div className="flex items-start gap-3">
-                                          <Thumbnail obj={obj} thumbs={thumbs} remember={rememberThumb}/>
-                                          <div>
-                                            <div className="font-medium text-lg">{obj.nom||"Objet sans nom"}</div>
-                                            <div className="flex items-center gap-2 flex-wrap text-base">
-                                              {obj.type ? <span>{obj.type}</span> : null}
-                                              {(obj.type && obj.constellationAbbr) ? <span className="opacity-60">•</span> : null}
-                                              {obj.constellationAbbr ? <span>{displayConstellation(obj.constellationAbbr, settings.displayConstellation||'latin')}</span> : null}
-                                            </div>
-                                            {obj.commonName ? <div className="text-sm italic opacity-80 mt-0.5">{obj.commonName}</div> : null}
-                                          </div>
-                                        </div>
-                                        <div className="flex gap-2">
-                                          <button onClick={function(){openEditObject(obj);}} className="text-blue-400 hover:underline text-sm">Modifier</button>
-                                          <button onClick={function(){removeObject(obj.id);}} className="text-red-400 hover:underline text-sm">Supprimer</button>
-                                        </div>
-                                      </div>
+      function sortEyepieces(list){
+        var copy=(list||[]).slice();
+        copy.sort(function(a,b){
+          var fa=(a.focal!=null)?a.focal:1e9, fb=(b.focal!=null)?b.focal:1e9;
+          if(fa===fb) return (a.name||"").localeCompare(b.name||"");
+          return fa-fb;
+        });
+        return copy;
+      }
+      var sortedEyepieces = useMemo(function(){ return sortEyepieces(eyepieces||[]); }, [ (eyepieces||[]).map?eyepieces.length:0, JSON.stringify(eyepieces||[]) ]);
 
-                                      <div className="text-sm mt-4 grid grid-cols-2 md:grid-cols-3 gap-4">
-                                        <div className="flex flex-col">
-                                          <div className="opacity-70 text-xs uppercase tracking-wide">AD (h)</div>
-                                          <div className="mt-1">{obj.raHours!=null ? (hmsFromHours(obj.raHours)+" ("+fmt(obj.raHours,2)+"h)") : "—"}</div>
-                                        </div>
-                                        <div className="flex flex-col">
-                                          <div className="opacity-70 text-xs uppercase tracking-wide">Déc (°)</div>
-                                          <div className="mt-1">{obj.decDeg!=null ? (fmt(obj.decDeg,2)+"°") : "—"}</div>
-                                        </div>
-                                        <div className="flex flex-col">
-                                          <div className="opacity-70 text-xs uppercase tracking-wide">Atlas</div>
-                                          <div className="mt-1">{obj.pageAtlas || "—"}</div>
-                                        </div>
-                                      </div>
+      var recId = useMemo(function(){
+        if(!draft || !draft.picked) return null;
+        if(!nightScope) return null;
+        return recommendEyepieceId(nightScope, draft.type||"", draft.filters||{}, sortedEyepieces||[], draft.sizeArcmin!=null?draft.sizeArcmin:null);
+      }, [draft && draft.picked, nightScope && nightScope.f_ratio, nightScope && nightScope.focal_mm, draft && draft.type, draft && draft.filters && draft.filters.uhc, draft && draft.filters && draft.filters.oiii, draft && draft.filters && draft.filters.hbeta, (sortedEyepieces||[]).length, draft && draft.sizeArcmin]);
 
-                                      {obj.note ? (
-                                        <div className="text-sm mt-4">
-                                          <div className="opacity-70 text-xs uppercase tracking-wide">Note</div>
-                                          <div className="mt-1 whitespace-pre-wrap">{obj.note}</div>
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </section>
+      var recFilter = useMemo(function(){
+        if(!draft || !draft.picked) return null;
+        return recommendFilterKey(draft.type||"", draft.commonName||"", draft.nom||"");
+      }, [draft && draft.picked, draft && draft.type, draft && draft.commonName, draft && draft.nom]);
+
+      return (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm mb-1">Nom / Désignation <span className="text-red-400">*</span></label>
+            <AutoComplete
+              value={draft.nom} setValue={function(v){ setDraft(Object.assign({},draft,{nom:v})); }}
+              placeholder="Ex: M42, M13, NGC6992, IC434… (les espaces saisis sont ignorés)"
+              fetcher={searchSkyObjectsDatastro}
+              onPick={async function(item){
+                var next = Object.assign({},draft,{picked:true});
+                if(item && typeof item==="object"){
+                  var primary = item.nom || draft.nom; 
+                  var display = primary + (item.commonName?(" — "+item.commonName):""); 
+                  next.nom = display;
+                  next.type = item.type || draft.type;
+                  next.constellation = item.constellation || draft.constellation;
+                  next.raHours = (item.raHours!=null)?item.raHours:draft.raHours;
+                  next.decDeg  = (item.decDeg!=null)?item.decDeg:draft.decDeg;
+                  next.commonName = item.commonName || draft.commonName;
+                  next.sizeArcmin = (item.sizeArcmin!=null)?item.sizeArcmin:draft.sizeArcmin;
+                }
+                if(next.constellation) next.constellation = prettyConstellation(next.constellation);
+                setDraft(next);
+              }}
+            />
+            {errNom ? <p className="text-sm text-red-400 mt-1">{errNom}</p> : null}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm mb-1">Constellation <span className="text-red-400">*</span></label>
+              <input className={(errCon?"border-red-500 ":"border-gray-700 ")+"w-full rounded-md border bg-gray-800 px-3 py-2"} value={draft.constellation||""} onChange={function(e){ setDraft(Object.assign({},draft,{constellation:e.target.value})); }}/>
+              {errCon ? <p className="text-sm text-red-400 mt-1">{errCon}</p> : null}
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Type</label>
+              <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.type||""} onChange={function(e){ setDraft(Object.assign({},draft,{type:e.target.value})); }}/>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm mb-1">Page Sky Atlas</label>
+              <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.pageAtlas||""} onChange={function(e){ setDraft(Object.assign({},draft,{pageAtlas:e.target.value})); }}/>
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Filtres optimaux</label>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={!!(draft.filters && draft.filters.uhc)} onChange={function(e){ setDraft(Object.assign({},draft,{filters:Object.assign({},draft.filters||{}, {uhc:e.target.checked})})); }}/>
+                  <span>UHC {recFilter==='uhc' && draft.picked ? <span className="text-green-400 font-semibold">(conseillé)</span> : null}</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={!!(draft.filters && draft.filters.oiii)} onChange={function(e){ setDraft(Object.assign({},draft,{filters:Object.assign({},draft.filters||{}, {oiii:e.target.checked})})); }}/>
+                  <span>OIII {recFilter==='oiii' && draft.picked ? <span className="text-green-400 font-semibold">(conseillé)</span> : null}</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={!!(draft.filters && draft.filters.hbeta)} onChange={function(e){ setDraft(Object.assign({},draft,{filters:Object.assign({},draft.filters||{}, {hbeta:e.target.checked})})); }}/>
+                  <span>Hβ {recFilter==='hbeta' && draft.picked ? <span className="text-green-400 font-semibold">(conseillé)</span> : null}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="block text-sm mb-1">Oculaires</label>
+              {!draft.picked ? <div className="text-xs opacity-70">Sélectionnez d’abord l’objet via l’autocomplétion pour obtenir une recommandation.</div> : null}
+            </div>
+            {(!eyepieces || !eyepieces.length) ? (
+              <div className="text-sm">Aucun oculaire enregistré. <button className="underline text-blue-400" onClick={openSettings} type="button">Ouvrir Paramètres</button></div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {eyepieces.slice().sort(function(a,b){
+                  var fa=(a.focal!=null)?a.focal:1e9, fb=(b.focal!=null)?b.focal:1e9; return fa-fb;
+                }).map(function(ep){
+                  var checked = (draft.epIds||[]).indexOf(ep.id)>=0;
+                  var isRec = draft.picked && (function(){
+                    var rid = recommendEyepieceId(nightScope, draft.type||"", draft.filters||{}, eyepieces||[], draft.sizeArcmin!=null?draft.sizeArcmin:null);
+                    return rid && ep.id===rid;
+                  })();
+                  return (
+                    <label key={ep.id} className="flex items-center gap-2 rounded border px-3 py-2 border-gray-700 bg-gray-800">
+                      <input type="checkbox" checked={checked} onChange={function(e){ 
+                        var set = new Set(draft.epIds||[]);
+                        if(e.target.checked) set.add(ep.id); else set.delete(ep.id);
+                        setDraft(Object.assign({},draft,{epIds:Array.from(set)}));
+                      }}/>
+                      <span className="text-sm">
+                        {ep.name} — {ep.focal} mm{ep.afov?(" • "+ep.afov+"°"):""}{isRec?<span className="text-green-400 font-semibold"> (conseillé)</span>:null}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             )}
           </div>
-        </main>
 
-        {/* Modales */}
-        <Modal open={nightModalOpen} title={(nights.some(function(n){ return n.id===(nightDraft&&nightDraft.id); }))?"Modifier la nuit":"Nouvelle nuit"} onClose={function(){setNightModalOpen(false);}} onSubmit={saveNight} submitLabel="Enregistrer">
-          <NightForm draft={nightDraft} setDraft={setNightDraft} telescopes={settings.telescopes} />
-        </Modal>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm mb-1">AD (h)</label>
+              <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={(draft.raHours!=null?fmt(draft.raHours,3):"")} onChange={function(e){ setDraft(Object.assign({},draft,{raHours:e.target.value!==""?Number(e.target.value):null})); }}/>
+            </div>
+            <div>
+              <label className="block text-sm mb-1">Déc (°)</label>
+              <input className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={(draft.decDeg!=null?fmt(draft.decDeg,3):"")} onChange={function(e){ setDraft(Object.assign({},draft,{decDeg:e.target.value!==""?Number(e.target.value):null})); }}/>
+            </div>
+          </div>
 
-        <Modal open={objectModalOpen} title={(((selectedNight&&selectedNight.objects)?selectedNight.objects:[]).some(function(o){ return o.id===(objectDraft&&objectDraft.id); }))?"Modifier l'objet":"Nouvel objet"} onClose={function(){setObjectModalOpen(false);}} onSubmit={saveObject} submitLabel="Enregistrer">
-          <ObjectForm draft={objectDraft} setDraft={setObjectDraft} errors={objectErrors} nightScope={(selectedNight?buildScope(selectedNight.diameter, selectedNight.focal):null)} eyepieces={settings.eyepieces} constLang={settings.displayConstellation||'latin'} />
-        </Modal>
+          <div>
+            <label className="block text-sm mb-1">Note</label>
+            <textarea rows="3" className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2" value={draft.note||""} onChange={function(e){ setDraft(Object.assign({},draft,{note:e.target.value})); }}></textarea>
+          </div>
+        </div>
+      );
+    }
 
-        <SettingsModal open={settingsOpen} onClose={function(){setSettingsOpen(false);}} settings={settings} onSave={function(s){ setSettings(s); }} />
-      </div>
-    );
-  }
+    /* ==============================
+       App
+    ============================== */
+    function App(){
+      var _n=useState(function(){ try{return JSON.parse(localStorage.getItem('ccop:nights')||'[]');}catch(_){return[];} }), nights=_n[0], setNights=_n[1];
+      var _sid=useState((nights[0]&&nights[0].id)||null), selectedId=_sid[0], setSelectedId=_sid[1];
 
-  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+      var _s=useState(function(){ try{var s=JSON.parse(localStorage.getItem('ccop:settings')||'{"telescopes":[],"eyepieces":[]}'); if(!s.telescopes)s.telescopes=[]; if(!s.eyepieces)s.eyepieces=[]; return s;}catch(_){return{telescopes:[],eyepieces:[]}}; }), settings=_s[0], setSettings=_s[1];
+      useEffect(function(){ try{ localStorage.setItem('ccop:settings', JSON.stringify(settings)); }catch(e){} },[settings]);
+
+      useEffect(function(){ try{ localStorage.setItem('ccop:nights', JSON.stringify(nights)); }catch(e){} },[nights]);
+
+      var _nm=useState(false), nightModalOpen=_nm[0], setNightModalOpen=_nm[1];
+      var _nd=useState({id:uid(),date:"",time:"",location:"",lat:null,lon:null,bortle:4,telescope:"",telescopeId:null,diameter:null,focal:null,meteo:"",objects:[]}), nightDraft=_nd[0], setNightDraft=_nd[1];
+      var _om=useState(false), objectModalOpen=_om[0], setObjectModalOpen=_om[1];
+      var _od=useState({}), objectDraft=_od[0], setObjectDraft=_od[1];
+      var _oe=useState({}), objectErrors=_oe[0], setObjectErrors=_oe[1];
+      var _sm=useState(false), settingsOpen=_sm[0], setSettingsOpen=_sm[1];
+
+      var _exp=useState(false), exportOpen=_exp[0], setExportOpen=_exp[1];
+      var _imp=useState(false), importOpen=_imp[0], setImportOpen=_imp[1];
+
+      var selectedNight = useMemo(function(){ for(var i=0;i<nights.length;i++){ if(nights[i].id===selectedId) return nights[i]; } return null; }, [nights,selectedId]);
+      var nightScope = useMemo(function(){ return selectedNight? buildScope(selectedNight.diameter, selectedNight.focal):null; }, [selectedNight && selectedNight.diameter, selectedNight && selectedNight.focal, selectedNight && selectedNight && selectedNight.id]);
+
+      var _col=useState({}), collapsed=_col[0], setCollapsed=_col[1];
+      useEffect(function(){ setCollapsed({}); },[selectedId]);
+
+      function groupedObjects(){
+        var objs=(selectedNight&&selectedNight.objects)?selectedNight.objects.slice():[];
+        var g={};
+        for(var i=0;i<objs.length;i++){
+          var o=objs[i];
+          var key=(prettyConstellation(o.constellation||"")||"Constellation inconnue");
+          if(!g[key]) g[key]=[];
+          g[key].push(o);
+        }
+        var keys=Object.keys(g).sort(function(a,b){ return a.localeCompare(b,'fr'); });
+        for(var k=0;k<keys.length;k++){
+          var kk=keys[k];
+          g[kk].sort(function(a,b){ return (a.nom||"").localeCompare(b.nom||"",'fr'); });
+        }
+        return {keys:keys, groups:g};
+      }
+
+      function openCreateNight(){ setNightDraft({id:uid(),date:"",time:"",location:"",lat:null,lon:null,bortle:4,telescope:"",telescopeId:null,diameter:null,focal:null,meteo:"",objects:[]}); setNightModalOpen(true); }
+      function openEditNight(n){ setNightDraft(Object.assign({},n)); setNightModalOpen(true); }
+      function saveNight(){
+        setNights(function(prev){
+          var exists=false;
+          for(var i=0;i<prev.length;i++){ if(prev[i].id===nightDraft.id){ exists=true; break; } }
+          if(exists){
+            return prev.map(function(n){ return n.id===nightDraft.id?Object.assign({},nightDraft):n; });
+          }else{
+            var added=prev.concat([Object.assign({},nightDraft)]);
+            if(!selectedId) setSelectedId(nightDraft.id);
+            return added;
+          }
+        });
+        setNightModalOpen(false);
+      }
+      function removeNight(id){
+        setNights(function(prev){ return prev.filter(function(n){ return n.id!==id; }); });
+        if(selectedId===id) setSelectedId(null);
+      }
+
+      function openCreateObject(){ setObjectDraft({id:uid(), picked:false, nom:"",constellation:"",type:"",raHours:null,decDeg:null,pageAtlas:"",epIds:[],filters:{uhc:false,oiii:false,hbeta:false},note:"",commonName:"", sizeArcmin:null}); setObjectErrors({}); setObjectModalOpen(true); }
+      function openEditObject(o){ setObjectDraft(Object.assign({},o,{picked:true})); setObjectErrors({}); setObjectModalOpen(true); }
+      function validateObject(d){ var e={}; if(!String(d.nom||"").trim()) e.nom="Le nom est obligatoire."; if(!String(d.constellation||"").trim()) e.constellation="La constellation est obligatoire."; return e; }
+
+      function objectPrimaryKey(o){
+        if(!o) return "";
+        var s = String(o.nom||"").toUpperCase();
+        var m=s.match(/\b(M\s*\d+|NGC\s*\d+|IC\s*\d+)\b/);
+        return m? m[1].replace(/\s+/g,'') : normalizeName(s);
+      }
+      function isDuplicate(night,d){
+        var target=objectPrimaryKey(d);
+        var arr=night.objects||[];
+        for(var i=0;i<arr.length;i++){
+          var o=arr[i];
+          if(o.id!==d.id && objectPrimaryKey(o)===target) return true;
+        }
+        return false;
+      }
+
+      function saveObject(){
+        if(!selectedNight) return;
+        var d=Object.assign({},objectDraft);
+        var errs=validateObject(d); if(Object.keys(errs).length){ setObjectErrors(errs); return; }
+        if(isDuplicate(selectedNight,d)){ alert("Cet objet est déjà présent dans cette nuit."); return; }
+        setNights(function(prev){
+          return prev.map(function(n){
+            if(n.id!==selectedNight.id) return n;
+            var found=false;
+            var newArr=(n.objects||[]).map(function(o){
+              if(o.id===d.id){ found=true; return Object.assign({},d); }
+              return o;
+            });
+            if(!found) newArr = newArr.concat([Object.assign({},d)]);
+            return Object.assign({},n,{objects:newArr});
+          });
+        });
+        setObjectModalOpen(false);
+      }
+      function removeObject(id){
+        if(!selectedNight) return;
+        setNights(function(prev){
+          return prev.map(function(n){
+            if(n.id!==selectedNight.id) return n;
+            return Object.assign({},n,{objects:(n.objects||[]).filter(function(o){ return o.id!==id; })});
+          });
+        });
+      }
+
+      function exportPDF(){
+        if(!selectedNight) return;
+        var info=selectedNight, scope=buildScope(info.diameter, info.focal);
+        var EP={}; for(var i=0;i<settings.eyepieces.length;i++){ var e=settings.eyepieces[i]; EP[e.id]=e; }
+        var grouped=(function(){
+          var objs=(info&&info.objects)?info.objects.slice():[];
+          var g={};
+          for(var i=0;i<objs.length;i++){
+            var o=objs[i]; var key=(prettyConstellation(o.constellation||"")||"Constellation inconnue");
+            if(!g[key]) g[key]=[]; g[key].push(o);
+          }
+          var keys=Object.keys(g).sort(function(a,b){ return a.localeCompare(b,'fr'); });
+          for(var k=0;k<keys.length;k++){ var kk=keys[k]; g[kk].sort(function(a,b){ return (a.nom||"").localeCompare(b.nom||"",'fr'); }); }
+          return {keys:keys, groups:g};
+        })();
+
+        var parts=[];
+        parts.push('<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CCOP — PDF</title><style>');
+        parts.push(':root{--bg:#fff;--fg:#111;--muted:#444;--line:#e5e7eb;}html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;-webkit-print-color-adjust:exact;print-color-adjust:exact}.page{max-width:900px;margin:0 auto;padding:28px 22px}h1{font-size:28px;margin:0 0 8px}.meta{color:var(--muted);font-size:14px;margin-bottom:22px}h2.group{font-size:22px;margin:22px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}.obj{padding:10px 0;border-bottom:1px dotted var(--line)}.obj:last-child{border-bottom:0}.objname{font-weight:700;font-size:16px;margin-bottom:2px}.row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted)}@page{size:A4;margin:14mm}');
+        parts.push('</style></head><body><div class="page">');
+        parts.push('<h1>Crazy Cloud — Liste d\'observation</h1>');
+        var meta=[];
+        if(info.location) meta.push(info.location);
+        if(info.date) meta.push(info.date);
+        if(info.time) meta.push(info.time);
+        if(info.bortle!=null) meta.push("Bortle "+info.bortle);
+        if(info.telescope) meta.push(info.telescope);
+        if(scope) meta.push(Math.round(scope.aperture_mm)+"/"+Math.round(scope.focal_mm)+" mm (f/"+(scope.f_ratio).toFixed(1)+")");
+        parts.push('<div class="meta">'+meta.join(' • ')+'</div>');
+
+        for(var ki=0; ki<grouped.keys.length; ki++){
+          var k=grouped.keys[ki];
+          parts.push('<h2 class="group">'+k.replace(/</g,"&lt;")+'</h2>');
+          var arr=grouped.groups[k]||[];
+          for(var ai=0; ai<arr.length; ai++){
+            var o=arr[ai];
+            var lineName=o.nom || "Objet";
+            var cols=[];
+            if(o.raHours!=null) cols.push('<div><strong>AD:</strong> '+hmsFromHours(o.raHours)+' ('+Number(o.raHours).toFixed(2)+'h)</div>');
+            if(o.decDeg!=null) cols.push('<div><strong>Déc:</strong> '+Number(o.decDeg).toFixed(2)+'°</div>');
+            if(o.pageAtlas) cols.push('<div><strong>Sky Atlas:</strong> '+String(o.pageAtlas).replace(/</g,"&lt;")+'</div>');
+            var eps=Array.isArray(o.epIds)?o.epIds:[];
+            if(eps.length){
+              var list=[];
+              for(var ei=0; ei<eps.length; ei++){
+                var id=eps[ei], ep=EP[id];
+                if(!ep) continue;
+                var mag=scope?Math.round(scope.focal_mm/(ep.focal||1)):null;
+                list.push(ep.name+(ep.focal?(" "+ep.focal+"mm"):"")+(mag?(" ("+mag+"×)"):""));
+              }
+              if(list.length) cols.push('<div><strong>Oculaires:</strong> '+list.join(', ').replace(/</g,"&lt;")+'</div>');
+            }
+            var fl = (o.filters? (function(F){var a=[]; if(F.uhc)a.push("UHC"); if(F.oiii)a.push("OIII"); if(F.hbeta)a.push("Hβ"); return a;})(o.filters) : []);
+            if(fl.length){ cols.push('<div><strong>Filtres:</strong> '+fl.join(', ').replace(/</g,"&lt;")+'</div>'); }
+            parts.push('<div class="obj"><div class="objname">'+lineName.replace(/</g,"&lt;")+'</div><div class="row">'+cols.join(' ')+'</div>'+(o.note?('<div class="row" style="margin-top:6px"><div><strong>Note:</strong> '+String(o.note).replace(/</g,"&lt;")+'</div></div>'):'')+'</div>');
+          }
+        }
+        parts.push('</div><script>window.focus();setTimeout(function(){try{window.print()}catch(e){}},250);<\/script></body></html>');
+        var w=window.open("","_blank"); if(!w){ alert("Popup bloquée."); return; } w.document.open(); w.document.write(parts.join("")); w.document.close();
+      }
+
+      function importAll(obj){
+        try{
+          var nightsOk = Array.isArray(obj.nights)? obj.nights : [];
+          var settingsOk = obj.settings && typeof obj.settings==="object" ? obj.settings : {telescopes:[],eyepieces:[]};
+          if(!Array.isArray(settingsOk.telescopes)) settingsOk.telescopes=[];
+          if(!Array.isArray(settingsOk.eyepieces)) settingsOk.eyepieces=[];
+          setSettings(settingsOk);
+          setNights(nightsOk);
+          setSelectedId(nightsOk[0] && nightsOk[0].id ? nightsOk[0].id : null);
+        }catch(e){
+          alert("Échec de l’import : "+String(e));
+        }
+      }
+
+      var upcoming=(nights||[]).filter(function(n){ return !isPastNight(n); }).sort(function(a,b){ var da=parseNightDateTime(a), db=parseNightDateTime(b); return (da?da.getTime():Infinity)-(db?db.getTime():Infinity); });
+      var past=(nights||[]).filter(function(n){ return isPastNight(n); }).sort(function(a,b){ var da=parseNightDateTime(a), db=parseNightDateTime(b); return (db?db.getTime():0)-(da?da.getTime():0); });
+
+      var grouped=groupedObjects();
+
+      return (
+        <div className="flex h-screen">
+          {/* Sidebar */}
+          <aside className="w-80 shrink-0 border-r border-gray-800 bg-gray-900/80 backdrop-blur">
+            <div className="p-4 flex items-center justify-between gap-3 border-b border-gray-800">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-lg bg-gray-800 grid place-items-center text-xl">☁️</div>
+                <div>
+                  <div className="font-semibold leading-tight">Crazy Cloud</div>
+                  <div className="text-sm opacity-70">Observation Planner</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Tip text="Exporter nuits + réglages en Base64 (copier/collez pour sauvegarde)">
+                  <button title="Exporter" className="p-2 rounded-md border border-gray-700 hover:bg-gray-800" onClick={function(){ setExportOpen(true); }}>⤴︎</button>
+                </Tip>
+                <Tip text="Importer une chaîne Base64 (remplace toutes les données locales)">
+                  <button title="Importer" className="p-2 rounded-md border border-gray-700 hover:bg-gray-800" onClick={function(){ setImportOpen(true); }}>⤵︎</button>
+                </Tip>
+                <Tip text="Gérer vos télescopes et oculaires">
+                  <button title="Paramètres" className="p-2 rounded-md border border-gray-700 hover:bg-gray-800" onClick={function(){ setSettingsOpen(true); }}>⚙️</button>
+                </Tip>
+              </div>
+            </div>
+
+            <div className="p-4 flex items-center justify-between">
+              <button className="px-3 py-2 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700" onClick={function(){ openCreateNight(); }}>+ Ajouter une nuit</button>
+            </div>
+
+            <div className="px-4 pb-4 overflow-y-auto h-[calc(100vh-140px)] space-y-6">
+              <div>
+                <div className="text-xs uppercase tracking-wide opacity-70 mb-2">À venir</div>
+                {upcoming.length? (
+                  <div className="space-y-2">
+                    {upcoming.map(function(n){
+                      return (
+                        <div key={n.id} className={"rounded-lg border "+(selectedId===n.id?"border-blue-500":"border-gray-800")+" bg-gray-900 shadow-sm"}>
+                          <button className="w-full text-left px-3 py-2" onClick={function(){ setSelectedId(n.id); }}>
+                            <div className="font-medium">{n.location||"Lieu inconnu"}</div>
+                            <div className="text-sm opacity-70">{(n.date||"Date ?")} • {(n.time||"Heure ?")} • Bortle {(n.bortle!=null?n.bortle:"?")}</div>
+                          </button>
+                          <div className="flex gap-2 px-3 pb-3">
+                            <button className="text-blue-400 hover:underline text-sm" onClick={function(){ openEditNight(n); }}>Modifier</button>
+                            <button className="text-red-400 hover:underline text-sm" onClick={function(){ removeNight(n.id); }}>Supprimer</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ): <div className="text-sm opacity-60">Aucune nuit planifiée.</div>}
+              </div>
+
+              <div>
+                <div className="text-xs uppercase tracking-wide opacity-70 mb-2">Passées</div>
+                {past.length? (
+                  <div className="space-y-2">
+                    {past.map(function(n){
+                      return (
+                        <div key={n.id} className="rounded-lg border border-gray-800 bg-gray-900 shadow-sm opacity-60">
+                          <button className="w-full text-left px-3 py-2" onClick={function(){ setSelectedId(n.id); }}>
+                            <div className="font-medium">{n.location||"Lieu inconnu"}</div>
+                            <div className="text-sm">{(n.date||"Date ?")} • {(n.time||"Heure ?")} • Bortle {(n.bortle!=null?n.bortle:"?")}</div>
+                          </button>
+                          <div className="flex gap-2 px-3 pb-3">
+                            <button className="text-blue-400 hover:underline text-sm" onClick={function(){ openEditNight(n); }}>Modifier</button>
+                            <button className="text-red-400 hover:underline text-sm" onClick={function(){ removeNight(n.id); }}>Supprimer</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ): <div className="text-sm opacity-60">Aucune nuit passée.</div>}
+              </div>
+            </div>
+          </aside>
+
+          {/* Main */}
+          <main className="flex-1 overflow-y-auto">
+            <div className="max-w-6xl mx-auto p-6">
+              {!selectedNight ? (
+                <div className="text-center opacity-70">Sélectionnez une nuit dans la colonne de gauche.</div>
+              ) : (
+                <div>
+                  {/* En-tête */}
+                  <div className="rounded-xl border border-gray-800 bg-gray-900 p-5 mb-6">
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <h1 className="text-2xl md:text-3xl font-semibold">{selectedNight.location||("Nuit du "+(selectedNight.date||"—"))}</h1>
+                      <div className="text-sm opacity-70">Bortle {(selectedNight.bortle!=null?selectedNight.bortle:"—")}</div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                      <div><div className="text-xs uppercase opacity-70">Date</div><div className="text-lg">{selectedNight.date||"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Heure</div><div className="text-lg">{selectedNight.time||"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Télescope</div><div className="text-lg">{selectedNight.telescope||"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Diamètre / Focale</div><div className="text-lg">{(selectedNight.diameter&&selectedNight.focal)?(Math.round(selectedNight.diameter)+"/"+Math.round(selectedNight.focal)+" mm"):"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Rapport f/D</div><div className="text-lg">{(selectedNight.diameter&&selectedNight.focal)?("f/"+(selectedNight.focal/selectedNight.diameter).toFixed(1)):"—"}</div></div>
+                      <div><div className="text-xs uppercase opacity-70">Coord. site</div><div className="text-lg">{(selectedNight.lat!=null&&selectedNight.lon!=null)?(fmt(selectedNight.lat,3)+"°, "+fmt(selectedNight.lon,3)+"°"):"—"}</div></div>
+                      <div className="lg:col-span-2"><div className="text-xs uppercase opacity-70">Météo</div><div className="text-lg">{selectedNight.meteo||"—"}</div></div>
+                    </div>
+                  </div>
+
+                  <section>
+                    <div className="flex items-center justify-between mb-3">
+                      <h2 className="font-medium">Objets à observer</h2>
+                      <div className="flex gap-2">
+                        <button className="px-3 py-2 text-sm rounded-md border border-gray-700 hover:bg-gray-800" onClick={function(){ exportPDF(); }}>Exporter en PDF</button>
+                        <button className="px-3 py-2 text-sm rounded-md bg-green-600 text-white hover:bg-green-700" onClick={function(){ openCreateObject(); }}>+ Ajouter un objet</button>
+                      </div>
+                    </div>
+
+                    {grouped.keys.length===0 ? (
+                      <div className="text-sm opacity-70">Aucun objet pour cette nuit.</div>
+                    ) : (
+                      <div className="space-y-6">
+                        {grouped.keys.map(function(key){
+                          var isCollapsed=!!collapsed[key];
+                          return (
+                            <div key={key} className="w-full">
+                              <button className="w-full flex items-center justify-between py-2" onClick={function(){ setCollapsed(function(c){ var n=Object.assign({},c); n[key]=!c[key]; return n; }); }}>
+                                <div className="text-2xl font-bold">{key}</div>
+                                <svg className={"h-5 w-5 transition-transform "+(isCollapsed?"-rotate-90":"")} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.25a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clipRule="evenodd"/></svg>
+                              </button>
+
+                              {!isCollapsed && (
+                                <div className="mt-2 space-y-3">
+                                  {grouped.groups[key].map(function(obj){
+                                    var filters=(function(F){var a=[]; if(F&&F.uhc)a.push("UHC"); if(F&&F.oiii)a.push("OIII"); if(F&&F.hbeta)a.push("Hβ"); return a;})(obj.filters||{});
+                                    function sortEp(list){
+                                      var copy=(list||[]).slice();
+                                      copy.sort(function(a,b){
+                                        var fa=(a&&a.focal!=null)?a.focal:1e9, fb=(b&&b.focal!=null)?b.focal:1e9;
+                                        return fa-fb;
+                                      });
+                                      return copy;
+                                    }
+                                    var epSelected = Array.isArray(obj.epIds)? sortEp(obj.epIds.map(function(id){ for(var i=0;i<settings.eyepieces.length;i++){ if(settings.eyepieces[i].id===id) return settings.eyepieces[i]; } return null; }).filter(function(x){return !!x;})) : [];
+                                    var recId = recommendEyepieceId(nightScope, obj.type||"", obj.filters||{}, settings.eyepieces||[], obj.sizeArcmin!=null?obj.sizeArcmin:null);
+                                    var recF = recommendFilterKey(obj.type||"", obj.commonName||"", obj.nom||"");
+                                    return (
+                                      <div key={obj.id} className="w-full rounded-lg border border-gray-800 bg-gray-900 p-4">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <div>
+                                            <div className="font-medium text-lg">{obj.nom||"Objet"}</div>
+                                            <div className="flex items-center gap-2 flex-wrap text-base">
+                                              {obj.type ? <span>{obj.type}</span> : null}
+                                              {(obj.type && obj.constellation) ? <span className="opacity-60">•</span> : null}
+                                              {obj.constellation ? <span>{prettyConstellation(obj.constellation)}</span> : null}
+                                            </div>
+                                            {obj.commonName ? <div className="text-sm italic opacity-80 mt-0.5">{obj.commonName}</div> : null}
+                                          </div>
+                                          <div className="flex gap-2">
+                                            <button className="text-blue-400 hover:underline text-sm" onClick={function(){ openEditObject(obj); }}>Modifier</button>
+                                            <button className="text-red-400 hover:underline text-sm" onClick={function(){ removeObject(obj.id); }}>Supprimer</button>
+                                          </div>
+                                        </div>
+
+                                        <div className="text-sm mt-4 grid grid-cols-2 gap-4">
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">AD (h)</div>
+                                            <div className="mt-1">{obj.raHours!=null ? (hmsFromHours(obj.raHours)+" ("+fmt(obj.raHours,2)+"h)") : "—"}</div>
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Déc (°)</div>
+                                            <div className="mt-1">{obj.decDeg!=null ? (fmt(obj.decDeg,2)+"°") : "—"}</div>
+                                          </div>
+                                        </div>
+
+                                        <div className="text-sm mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Sky Atlas</div>
+                                            <div className="mt-1">{obj.pageAtlas||"—"}</div>
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Oculaires</div>
+                                            <div className="mt-1 flex flex-wrap gap-2">
+                                              {epSelected.length ? epSelected.map(function(ep){
+                                                var mag = nightScope ? Math.round(nightScope.focal_mm/(ep.focal||1)) : null;
+                                                var pill = ep.name+(ep.focal?(" "+ep.focal+"mm"):"")+(mag?(" ("+mag+"×)"):"");
+                                                var isRec = (recId && ep.id===recId);
+                                                return <Tag key={ep.id}><span>{pill}{isRec?<span className="text-green-400 font-semibold"> (conseillé)</span>:null}</span></Tag>;
+                                              }) : <span>—</span>}
+                                            </div>
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <div className="opacity-70 text-xs uppercase tracking-wide">Filtres</div>
+                                            <div className="mt-1 flex flex-wrap gap-2">
+                                              {filters.length?filters.map(function(f,i){
+                                                var match = ( (recF==="uhc" && f==="UHC") || (recF==="oiii" && f==="OIII") || (recF==="hbeta" && f==="Hβ") );
+                                                return <Tag key={i}><span>{f}{match?<span className="text-green-400 font-semibold"> (conseillé)</span>:null}</span></Tag>;
+                                              }):<span>—</span>}
+                                            </div>
+                                          </div>
+                                          {obj.note ? (
+                                            <div className="flex flex-col md:col-span-3">
+                                              <div className="opacity-70 text-xs uppercase tracking-wide">Note</div>
+                                              <div className="mt-1 whitespace-pre-wrap">{obj.note}</div>
+                                            </div>
+                                          ):null}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                </div>
+              )}
+            </div>
+          </main>
+
+          {/* Modales */}
+          <Modal open={nightModalOpen} title={(nights.some(function(n){ return n.id===(nightDraft&&nightDraft.id); }))?"Modifier la nuit":"Nouvelle nuit"} onClose={function(){ setNightModalOpen(false); }} onSubmit={saveNight} submitLabel="Enregistrer">
+            <NightForm draft={nightDraft} setDraft={setNightDraft} telescopes={settings.telescopes}/>
+          </Modal>
+
+          <Modal open={objectModalOpen} title={(((selectedNight&&selectedNight.objects)?selectedNight.objects:[]).some(function(o){ return o.id===(objectDraft&&objectDraft.id); }))?"Modifier l'objet":"Nouvel objet"} onClose={function(){ setObjectModalOpen(false); }} onSubmit={saveObject} submitLabel="Enregistrer">
+            <ObjectForm draft={objectDraft} setDraft={setObjectDraft} errors={objectErrors} nightScope={nightScope} eyepieces={settings.eyepieces} openSettings={function(){ setObjectModalOpen(false); setSettingsOpen(true); }}/>
+          </Modal>
+
+          <SettingsModal open={settingsOpen} onClose={function(){ setSettingsOpen(false); }} settings={settings} onSave={function(s){ setSettings(s); }}/>
+
+          <ExportModal open={exportOpen} onClose={function(){ setExportOpen(false); }} nights={nights} settings={settings}/>
+          <ImportModal open={importOpen} onClose={function(){ setImportOpen(false); }} onImport={importAll}/>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
   </script>
 </body>
 </html>
